@@ -1,0 +1,300 @@
+# Report template format (v1)
+
+**Status:** Proposed (Milestone 0007) · **Decision record:** [ADR 0003](/docs/adr/0003-template-driven-reporting-on-telemetry.md)  
+**Owner module:** `src/docsentinel/telemetry/` · **Standard templates:** `src/docsentinel/telemetry/templates/{text,github,json}.json`
+
+Every report DocSentinel prints -- `text`, `github`, `json`, or a user's own -- is
+the output of **one** renderer applied to **one** template over **one** context.
+No output format is hardcoded: the renderer contains no format names, no literal
+report lines, and no escaping rules. This document is the contract for all three.
+
+## 1. Pipeline
+
+```
+ScanResult --> ReportModel (core provider) --> + extension providers --> context
+                                                                           |
+template.json --> loader/validator --> renderer(template, context) --> str
+```
+
+- The **context** is a plain, JSON-shaped tree (`dict`/`list`/`str`/`int`/`float`/`bool`/`None`).
+  The renderer never sees `ScanResult`, `Finding`, or any object, so a template
+  cannot reach attributes, methods, or `__class__`-style introspection.
+- The renderer is **logic-less**: substitution, iteration, a closed set of
+  conditions, and a closed set of filters. No `eval`, no expression language, no
+  Jinja, no `str.format` on template text.
+- Output is **deterministic** for a given `(ScanResult, config, template)`. Values
+  that vary per run (`run.generated_at`, `run.id`) come from an opt-in provider
+  and are absent by default.
+
+## 2. Common envelope
+
+```json
+{
+  "template_version": 1,
+  "name": "text",
+  "type": "text",
+  "description": "Human-readable report, findings grouped under their document.",
+  "requires_extensions": []
+}
+```
+
+| Key | Rules |
+|---|---|
+| `template_version` | Integer; this spec is `1`. Unknown version -> `TemplateError`. |
+| `name` | Kebab-case; must equal the file stem for packaged templates. |
+| `type` | `"text"` or `"json"`. Unknown type -> `TemplateError`. |
+| `requires_extensions` | Extension names that must be loaded (Section 7); missing -> `TemplateError`. |
+| unknown keys | Rejected (fail closed), so a typo never silently drops content. |
+
+## 3. Variable syntax
+
+- `{name}` -- context lookup; `{doc.path}` -- dotted path over dicts; `{items.0}` -- list index.
+- `{value|filter|filter(arg)}` -- filter chain, applied left to right.
+- `{{` and `}}` -- literal braces.
+- A reference to an unknown variable is a **load-time** `TemplateError` (the loader
+  knows the context schema), never an empty string at render time.
+- `variables_used` on a node is mandatory in `text` templates and must equal the
+  set of variables the node's `text` references. The loader checks both directions,
+  so the declaration is lint-enforced documentation, not a second source of truth.
+
+## 4. `text` templates
+
+```json
+{
+  "type": "text",
+  "output": { "join": "\n", "trailing_newline": false },
+  "lines": [ <node>, ... ]
+}
+```
+
+### Node types
+
+| `type` | Purpose | Keys |
+|---|---|---|
+| `line` | One output line. | `text`, `variables_used`, optional `when` |
+| `loop` | Iterate a list in context. | `over`, `as`, `placement`, `when`; then `text` + `separator` (inline placements) or `body` (block) |
+| `group` | A conditional run of nodes with no loop. | `when`, `body` |
+
+`loop.placement`:
+
+| Value | Behaviour |
+|---|---|
+| `"block"` (default) | Render `body` once per item; each emitted line goes on its own output line. This is how findings appear **directly under their document**: an outer loop over `documents_with_problems` emits the document line, then an inner loop over `doc.problems` emits the indented finding lines. |
+| `"one-line"` | Render `text` per item and join with `separator` into **one** output line. |
+| `"append"` | Like `one-line`, but the result is appended to the previously emitted line (no line break). Used for a trailing list after a `line`, e.g. `... not enabled: ` + `DS110 (set x), DS112 (set y)`. Nothing is appended for an empty list. |
+
+`text` may carry `prefix`/`suffix` on inline loops, emitted only when the list is non-empty.
+
+### Conditions (`when`)
+
+A closed grammar; anything else is a `TemplateError`:
+
+```json
+{ "var": "profile", "eq": "deep" }
+{ "var": "doc.problem_count", "gt": 0 }
+{ "var": "advisory", "truthy": true }
+{ "all": [ <cond>, <cond> ] }   { "any": [ ... ] }   { "not": <cond> }
+```
+
+Operators: `eq`, `ne`, `in`, `gt`, `lt`, `truthy`, `falsy`.
+
+### Example (excerpt of `text.json`)
+
+```json
+{
+  "template_version": 1, "name": "text", "type": "text",
+  "lines": [
+    { "type": "line", "text": "Schema version: {schema_version}", "variables_used": ["schema_version"] },
+    { "type": "line", "text": "Profile: {profile}", "variables_used": ["profile"] },
+    { "type": "line", "text": "Documents: {documents_count} ({documents_with_problems_count} with problems)",
+      "variables_used": ["documents_count", "documents_with_problems_count"] },
+    { "type": "line", "text": "Enabled rules: {enabled_rules|json}", "variables_used": ["enabled_rules"] },
+    { "type": "line", "when": { "var": "opt_in_off", "falsy": true },
+      "text": "{rules_evaluated} {rules_type} rule(s) evaluated.",
+      "variables_used": ["rules_evaluated", "rules_type"] },
+    { "type": "line", "when": { "var": "opt_in_off", "truthy": true },
+      "text": "{rules_evaluated} {rules_type} rule(s) evaluated; opt-in rule(s) not enabled: ",
+      "variables_used": ["rules_evaluated", "rules_type"] },
+    { "type": "loop", "over": "opt_in_off", "as": "rule", "placement": "append", "separator": ", ",
+      "when": { "var": "opt_in_off", "truthy": true },
+      "text": "{rule.code} (set {rule.option})", "variables_used": ["rule.code", "rule.option"] },
+    { "type": "line", "when": { "var": "advisory", "truthy": true },
+      "text": "{advisory}", "variables_used": ["advisory"] },
+    { "type": "loop", "over": "documents_with_problems", "as": "doc", "placement": "block", "body": [
+      { "type": "line", "text": "{doc.path|neutralize} ({doc.bytes} bytes)", "variables_used": ["doc.path", "doc.bytes"] },
+      { "type": "loop", "over": "doc.problems", "as": "p", "placement": "block", "body": [
+        { "type": "line", "text": "  {p.severity}: {doc.path|neutralize}: {p.message|neutralize}",
+          "variables_used": ["p.severity", "doc.path", "p.message"] } ] } ] },
+    { "type": "loop", "over": "pending", "as": "reason", "placement": "block", "body": [
+      { "type": "line", "text": "Pending: {reason|neutralize}", "variables_used": ["reason"] } ] }
+  ]
+}
+```
+
+## 5. `json` templates
+
+```json
+{
+  "type": "json",
+  "schema_version": 2,
+  "output": { "indent": 2, "ensure_ascii": true, "sort_keys": false },
+  "body": <value>
+}
+```
+
+`body` is any JSON value. A JSON object whose keys start with `$` is an
+**operator**; every other value is emitted literally.
+
+| Operator | Meaning |
+|---|---|
+| `{"$var": "doc.path"}` | The context value at that path, **by type** (a list stays a list, `None` stays `null`). `{"$var": "run"}` embeds a whole sub-tree -- this is the "widest reporting" escape hatch. |
+| `{"$var": "x", "$default": 0}` | Fallback when the value is `None`. |
+| `{"$for": "documents", "as": "doc", "each": <value>}` | Map a list through `each`. |
+| `{"$if": <cond>, "then": <value>, "else": <value>}` | Conditional value; omit `else` to yield `null`. |
+| `{"$str": "{doc.path}:{p.line}"}` | Interpolated string (same variable syntax, filters allowed). |
+| `{"$omit_if": <cond>, "value": <value>}` | Inside an object, drop the key when the condition holds. |
+
+`ensure_ascii=true` is the safety property of the JSON sink: every control and
+non-ASCII code point is escaped by serialization, so no `neutralize` filter is
+needed (and none is applied, preserving JSON v1 behaviour).
+
+### Standard `json.json` (schema 2) body shape
+
+```json
+{
+  "schema_version": 2,
+  "profile": "fast",
+  "run": { "model": null, "notice": "...", "advisory": null },
+  "summary": { "documents": 358, "documents_with_problems": 41, "findings": 187,
+               "by_severity": { "error": 150, "warning": 37 }, "by_rule": { "DS101": 150 } },
+  "rules": { "enabled": ["DS101"], "evaluated": 12, "opt_in_off": [ { "code": "DS110", "option": "require_fence_languages" } ] },
+  "documents": [
+    {
+      "path": "adr/0003-pipeline-introspection-and-unified-debug-mode.md",
+      "bytes": 15033,
+      "domain": "documentation",
+      "problems": [
+        { "rule": "DS101", "type": "dangling link", "message": "dangling link -> /docs/x.md",
+          "value": "/docs/x.md", "severity": "error", "line": 3, "column": 15,
+          "fault_class": "dangling_reference", "tier": "deterministic", "outcome": "rejected" }
+      ]
+    }
+  ],
+  "pending": []
+}
+```
+
+Clean documents are **included** with `"problems": []`: the denominator is what
+turns a fault count into a fault *rate*. The bare list-of-documents shape from the
+original request ships as the example template `json-documents.json`.
+
+## 6. Context schema
+
+The loader validates every reference against this schema. Each variable carries a
+**trust** tag; see Section 8.
+
+### Run level (core provider)
+
+| Variable | Type | Trust |
+|---|---|---|
+| `schema_version` | int (legacy `ScanResult.schema_version`) | trusted |
+| `report_schema_version` | int (template's declared schema) | trusted |
+| `profile` | str | trusted |
+| `enabled_rules` | list[str] | trusted |
+| `documents_count`, `documents_with_problems_count`, `findings_count` | int | trusted |
+| `rules_evaluated` | int | trusted |
+| `rules_type` | str (the profile name) | trusted |
+| `opt_in_off` | list[{`code`, `option`}] | trusted |
+| `notice` | str (legacy pre-built string, kept for json v1) | trusted |
+| `advisory` | str or null (deep-profile banner when it applies) | trusted |
+| `pending` | list[str] | **untrusted** |
+| `severity_counts`, `rule_counts` | dict[str,int] | trusted |
+| `model` | str or null (`generated_by_model`) | trusted |
+| `documents`, `documents_with_problems` | list[document] | -- |
+| `findings` | flat list[problem] (each carrying its `document_path`) | -- |
+| `run.generated_at`, `run.id` | str | trusted, **opt-in only** |
+
+### Document
+
+`path` (**untrusted**), `bytes`, `problem_count`, `severity_counts`, `problems`
+(list), plus extension keys under `ext.<name>.*` (e.g. `doc.ext.domain.name`).
+
+### Problem
+
+| Variable | Notes | Trust |
+|---|---|---|
+| `rule`, `rule_title`, `severity`, `line`, `column`, `fault_class`, `tier`, `outcome` | `column`/`line` may be null | trusted |
+| `type` | short category (`dangling link`); null if the detector gave none | trusted |
+| `message` | full detector message | **untrusted** |
+| `value` | offending token (target path, name); null if not extracted | **untrusted** |
+| `document_path` | repeated for flat `findings` | **untrusted** |
+
+## 7. Filters
+
+| Filter | Effect | Sink |
+|---|---|---|
+| `neutralize` | Backslash-escape C0/C1/DEL, bidi, zero-width, line separators, lone surrogates (the existing `_neutralize_controls` table, CR/LF included). | text |
+| `gha_property` | `neutralize` (CR/LF kept) then percent-encode `% \r \n : ,`. | github |
+| `gha_data` | `neutralize` (CR/LF kept) then percent-encode `% \r \n`. | github |
+| `json` | `json.dumps` (ASCII-safe). | any |
+| `join(sep)`, `len`, `lower`, `upper`, `default(x)` | Plain transforms; never a sink. | -- |
+| `ext.<ext>.<name>` | Filter registered by an extension. | per declaration |
+
+Filters are pure functions `str -> str` (or the stated type) registered in a
+closed table; a template cannot define one. An extension may add namespaced
+filters and must declare whether each is a *sink* filter.
+
+## 8. Trust rule (fail closed)
+
+A `text`-type template that references an **untrusted** variable must route it
+through a *sink* filter (`neutralize`, `gha_property`, `gha_data`, `json`, or an
+extension filter declared as a sink) **before it is emitted**. Otherwise the
+loader raises `TemplateError` -- an author cannot forget escaping, and a custom
+template cannot reintroduce the log-forging / Trojan-Source holes the current
+renderer closes. `json` templates are exempt: serialization is the sink.
+
+## 9. Extensions (variables, calculations, filters)
+
+Extensions are Python callables that add data to the context. They never touch
+the renderer.
+
+- Variables are namespaced: an extension named `domain` can only write under
+  `ext.domain.*`, `doc.ext.domain.*`, `p.ext.domain.*`. It cannot overwrite a core
+  variable.
+- Three hooks, all optional: `provide_run(model) -> Mapping`,
+  `provide_document(doc, model) -> Mapping`, `provide_problem(problem, doc, model) -> Mapping`.
+  Returned trees must be JSON-shaped; anything else is an `ExtensionError`.
+- Selected by `telemetry_extensions = ["builtin:domain", "python:<module>:<callable>"]`.
+  `builtin:*` names resolve inside the package; `python:` runs arbitrary code and
+  is **refused** unless the invoker passes `--allow-python-extensions` or sets
+  `DOCSENTINEL_ALLOW_PYTHON_EXTENSIONS=1` -- a scanned repository's own
+  `docsentinel.toml` must not be able to execute code in CI by itself.
+- A failing extension during a **report** is a fail-closed `ExtensionError`
+  (CLI exit 2, neutralized message). During fault-**event emission** (Milestone
+  0006) the same failure is swallowed, because telemetry must never fail a scan.
+
+The shipped example, `builtin:domain`, assigns `domain` from the document path
+using ordered glob rules (first match wins):
+
+```toml
+[tool.doc_sentinel.telemetry_domains]
+".claude/agents/**" = "agent"
+".claude/skills/**" = "agent"
+"docs/**"           = "documentation"
+"adr/**"            = "documentation"
+"*"                 = "documentation"
+```
+
+The same value feeds `FaultEvent.domain` (Milestone 0006) so the report and the
+event stream can never disagree.
+
+## 10. Errors
+
+| Error | When | CLI |
+|---|---|---|
+| `TemplateError` | unreadable/oversized/unparseable/invalid template, unknown variable/filter/operator, `variables_used` mismatch, untrusted variable without a sink filter, missing required extension | exit 2 |
+| `ExtensionError` | extension import/hook failure, non-JSON-shaped return, namespace violation, python extension not allowed | exit 2 |
+
+Messages echo bounded, `neutralize`d text. Templates named in config must be
+root-contained regular files of bounded size (same containment gate as DS115's
+mapping file); a template given on the command line is trusted like any argv path.
