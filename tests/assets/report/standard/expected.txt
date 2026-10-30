@@ -1,0 +1,12 @@
+Schema version: 1
+Profile: standard
+Documents: 2
+Enabled rules: ["DS201", "DS202", "DS203", "DS204"]
+4 standard rule(s) evaluated.
+  docs/a.md (1024 bytes)
+  docs/b.md (2048 bytes)
+Pending: DS204: no docsig_paths configured
+warning: docs/a.md: Grade level 19.2 exceeds max_grade_level 18.0
+warning: docs/b.md: Paragraph duplicates docs/a.md:4 (similarity 0.97)
+warning: docs/b.md: Low-information paragraph (score 0.05)
+error: src/calc.py: Docstring parameter 'y' does not exist in add(x)
