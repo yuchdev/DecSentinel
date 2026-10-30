@@ -1,7 +1,7 @@
 # Rule-code to fault-class mapping
 
 Hand-maintained mapping consumed by the fault-telemetry adapter in
-[`telemetry.py`](telemetry.py) to set the `class` field of every emitted
+[`telemetry/`](telemetry/__init__.py) to set the `class` field of every emitted
 `FaultEvent`. It lives next to [`rules.py`](rules.py) because it is co-maintained
 with the rule registry: **every registered rule code must have exactly one row
 here.** A rule that reaches the adapter with no row falls back to the generic

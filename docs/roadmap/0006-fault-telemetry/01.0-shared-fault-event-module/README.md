@@ -1,6 +1,6 @@
 # Story 01.0 — Contract spec, local event type/Protocol, and conformance tripwire
 
-**Category:** infrastructure / prerequisite · **Proposed sources:** `docs/specs/fault-event-contract.md`, `src/docsentinel/telemetry.py`  
+**Category:** infrastructure / prerequisite · **Proposed sources:** `docs/specs/fault-event-contract.md`, `src/docsentinel/telemetry/`  
 **Depends on:** nothing in DocSentinel internals — by design.
 
 > **Slug note:** this directory keeps the `shared-fault-event-module` slug for link

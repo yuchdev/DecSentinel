@@ -1,6 +1,6 @@
 # Story 02.0 — Pluggable sinks and the config/CLI surface
 
-**Category:** extension surface + configuration · **Proposed sources:** `src/docsentinel/telemetry.py`, `src/docsentinel/config.py`, `src/docsentinel/cli.py`, `pyproject.toml`  
+**Category:** extension surface + configuration · **Proposed sources:** `src/docsentinel/telemetry/`, `src/docsentinel/config.py`, `src/docsentinel/cli.py`, `pyproject.toml`  
 **Depends on:** [Story 01.0](/docs/roadmap/0006-fault-telemetry/01.0-shared-fault-event-module/README.md).
 
 > **Slug note:** this directory keeps the `config-and-cli-surface` slug; it now

@@ -11,7 +11,7 @@
 | `docs/adr/0001-config-loading-via-layered-settings.md` | Illustrative example ADR (layered pydantic-settings). Not a real DocSentinel decision; DocSentinel loads config with `tomllib` in `config.py`. |
 | [`docs/adr/0002-fault-telemetry-event-emission.md`](adr/0002-fault-telemetry-event-emission.md) | ADR 0002 (Proposed): fault-telemetry event emission. The cross-tool contract is a written spec (not shared code); DocSentinel implements its own `FaultEvent` dataclass and `FaultEventSink` PEP 544 Protocol with flexibly pluggable sinks (JSONL/logging/SQLite/custom callable), the `generated_by_model` flag, and a single `engine.scan()` call site. |
 | [`docs/specs/fault-event-contract.md`](specs/fault-event-contract.md) | Canonical cross-tool fault-event contract shared with FlakeForge: event fields/types, `tier`/`outcome` vocabularies, `schema_version` and its bump policy, the `FaultEventSink` Protocol, and runnable `JsonlSink`/`LoggingSink`/`SqliteSink`/custom-sink examples. Shared as a document only — no shared code. |
-| [`src/docsentinel/fault_classes.md`](../src/docsentinel/fault_classes.md) | Hand-maintained rule-code → fault-class mapping table consumed by the telemetry adapter in `telemetry.py`; co-maintained with `rules.py`. |
+| [`src/docsentinel/fault_classes.md`](../src/docsentinel/fault_classes.md) | Hand-maintained rule-code → fault-class mapping table consumed by the telemetry adapter in `telemetry/`; co-maintained with `rules.py`. |
 | `docs/adr/assets/0001-config-source-precedence.mmd` | Mermaid diagram referenced by the example ADR 0001. |
 | `docs/agent/agents.md` | Reference table of the kit's Claude Code agents, their models and roles. |
 | `docs/agent/skills.md` | Reference table of the kit's skills and how to invoke them. |

@@ -1,7 +1,7 @@
 # Task 01 — Reference sinks and the `build_sink` factory
 
 **Parent story:** [Story 02.0](/docs/roadmap/0006-fault-telemetry/02.0-config-and-cli-surface/README.md)  
-**Proposed source:** `src/docsentinel/telemetry.py`
+**Proposed source:** `src/docsentinel/telemetry/`
 
 Full runnable reference implementations are in
 [the contract spec](/docs/specs/fault-event-contract.md) §6–§7; this task lands

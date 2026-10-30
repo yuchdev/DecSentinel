@@ -1,6 +1,6 @@
 # Story 03.0 — DocSentinel adapter and single-call-site emission
 
-**Category:** integration · **Proposed sources:** `src/docsentinel/telemetry.py`, `src/docsentinel/engine.py`  
+**Category:** integration · **Proposed sources:** `src/docsentinel/telemetry/`, `src/docsentinel/engine.py`  
 **Depends on:** [Story 01.0](/docs/roadmap/0006-fault-telemetry/01.0-shared-fault-event-module/README.md), [Story 02.0](/docs/roadmap/0006-fault-telemetry/02.0-config-and-cli-surface/README.md).
 
 ## Goal
@@ -18,7 +18,7 @@ story that turns behaviour on (and only when `telemetry_enabled`).
 
 ## Definition of done
 
-- The adapter in `telemetry.py` is the only code importing both the event
+- The adapter in `telemetry/` is the only code importing both the event
   machinery and DocSentinel types (`ScanResult`, `Finding`, `RULES`).
 - `events_for_result` reads the finished `ScanResult` (and the pre-baseline finding
   set for `"suppressed"`) without re-running analyzers or duplicating finding
