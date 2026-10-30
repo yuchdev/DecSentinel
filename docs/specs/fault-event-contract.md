@@ -92,7 +92,7 @@ the fault-class table.
 - **Major bump** (`"1.0"` -> `"2.0"`): breaking change - renaming or removing a
   top-level field, or changing a field's type/meaning.
 - Any bump is a **coordinated change in all producers plus the collector**. In
-  DocSentinel, the bump touches both `SCHEMA_VERSION` in `telemetry.py` and the
+  DocSentinel, the bump touches both `SCHEMA_VERSION` in `telemetry/events.py` and the
   literal tables in this spec in the *same* commit; the conformance tripwire test
   (§6) fails until they agree. FlakeForge mirrors the spec change independently.
 
@@ -140,7 +140,7 @@ when the attribute is present.
 
 All reference sinks below are **stdlib-only** and runnable as written (given the
 tool's own `FaultEvent`/`to_json_dict`). They are the examples a user copies or
-adapts. DocSentinel ships these in `src/docsentinel/telemetry.py`.
+adapts. DocSentinel ships these in `src/docsentinel/telemetry/`.
 
 Assumed helpers from the owning module (each tool defines its own copy):
 
@@ -356,7 +356,7 @@ scan).
 | Rule codes | `DS1xx`/`DS2xx`/`DS3xx` | `X0xx` |
 | `tier` source | profile (`fast`/`standard` -> deterministic, `deep` -> heuristic) | rule kind |
 | `"escalated"` | reserved, not emitted v1 | may emit for its HITL hop |
-| Event type / Protocol / sinks | its own copy in `telemetry.py` | its own copy in its repo |
+| Event type / Protocol / sinks | its own copy in `telemetry/` | its own copy in its repo |
 | Shared | **this spec only** | **this spec only** |
 
 Any change to §1-§4 is a coordinated `schema_version` bump across both tools and
