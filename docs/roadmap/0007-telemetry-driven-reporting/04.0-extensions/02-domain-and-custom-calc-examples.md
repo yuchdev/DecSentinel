@@ -6,10 +6,10 @@
 ## `builtin:domain`
 
 Assigns a free-string `domain` to each document from its path (the same free-string
-vocabulary as the 0006 contract: `documentation`, `agent`, ... never a closed enum).
+vocabulary as the 0006 contract: `docs`, `agent`, ... never a closed enum).
 
 - Config: `telemetry_domains` -- an **ordered** table of glob → domain, first match
-  wins, default fallback `"*"` (default value `"documentation"` if absent). Globs
+  wins, default fallback `"*"` (default value `"docs"` if absent). Globs
   use the restricted literal/`?`/`*`/`**` subset already used by
   `documentation_naming_prefix_patterns` (no regex), matched against the
   scan-root-relative POSIX path; the options table validates globs at load.
@@ -21,7 +21,7 @@ vocabulary as the 0006 contract: `documentation`, `agent`, ... never a closed en
   `FaultEvent.domain` and the report cannot disagree.
 - Example config shipped in `examples/docsentinel.toml`:
   `".claude/agents/**" = "agent"`, `".claude/skills/**" = "agent"`,
-  `"docs/**" = "documentation"`, `"adr/**" = "documentation"`.
+  `"docs/**" = "docs"`, `"adr/**" = "docs"`.
 
 ## `builtin:document_stats` (custom calculation)
 
@@ -41,7 +41,7 @@ model. Cross-link the spec and the examples; run `/link-check`.
 - Unit: first-match-wins, fallback, `**` depth, a path matching two globs picks the
   earlier; invalid glob → `ConfigError` at load.
 - Integration (`_ds101`): `.claude/agents/x.md` → `agent`, `docs/x.md` →
-  `documentation` in `json.json`; the same two paths in emitted `FaultEvent`s
+  `docs` in `json.json`; the same two paths in emitted `FaultEvent`s
   (once 0006 Story 03.0 is merged -- gate this case with a clear skip reason).
 - Unit: `document_stats` arithmetic, zero-byte document, tie-break determinism.
 - Docs: the guide's example template and extension are executed by a test so the

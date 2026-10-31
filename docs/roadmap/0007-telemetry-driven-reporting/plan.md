@@ -20,7 +20,7 @@ and `json` become three packaged templates (`text.json`, `github.json`,
   with rule, type, value, severity, line, column, fault class, tier, outcome) so
   it can serve as the primary collection channel for hallucination data.
 - **Extensible:** Python extensions add custom calculations and attributes such
-  as `domain` (`documentation` vs `agent`, derived from the file path) without
+  as `domain` (`docs` vs `agent`, derived from the file path) without
   touching the renderer.
 
 Motivating evidence: the CanonixEngine runs in
@@ -122,7 +122,7 @@ path references. 0006 Stories 02.0–04.0 then land into `telemetry/sinks.py` an
 - [ ] `--template PATH` renders a user template; an invalid one exits 2 with a
       neutralized message.
 - [ ] `builtin:domain` labels a `.claude/agents/x.md` document `agent` and a
-      `docs/x.md` document `documentation`, in the report and in `FaultEvent.domain`.
+      `docs/x.md` document `docs`, in the report and in `FaultEvent.domain`.
 - [ ] A `python:` extension is refused without the explicit opt-in; allowed with it.
 - [ ] Two consecutive runs produce byte-identical default reports.
 - [ ] CanonixEngine acceptance: re-running the 9 reports yields the specified

@@ -490,3 +490,23 @@ def test_build_rejects_unbounded_model_id_without_echo(model: str):
     with pytest.raises(ValueError) as caught:
         ReportModel.build(_result(), Config(), model=model)
     assert model == "" or model not in str(caught.value)
+
+
+def test_default_domain_is_docs_per_fault_event_contract():
+    """
+    [Unit] classify: verifies the default fault domain is the one the fault-event contract names.
+
+    Scenario:
+        Given the classify module constant
+        When the default domain is read
+        Then it equals "docs" (owner ruling D7).
+
+    Boundaries:
+        - Focus: ``DEFAULT_DOMAIN``
+        - Fixtures/params: none
+        - Scope: constant only
+
+    On failure, first check:
+        - ``telemetry/classify.py`` and docs/specs/fault-event-contract.md
+    """
+    assert DEFAULT_DOMAIN == "docs"

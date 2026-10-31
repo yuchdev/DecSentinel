@@ -178,7 +178,7 @@ needed (and none is applied, preserving JSON v1 behaviour).
     {
       "path": "adr/0003-pipeline-introspection-and-unified-debug-mode.md",
       "bytes": 15033,
-      "domain": "documentation",
+      "domain": "docs",
       "problems": [
         { "rule": "DS101", "type": "dangling link", "message": "dangling link -> /docs/x.md",
           "value": "/docs/x.md", "severity": "error", "line": 3, "column": 15,
@@ -319,9 +319,9 @@ using ordered glob rules (first match wins):
 [tool.doc_sentinel.telemetry_domains]
 ".claude/agents/**" = "agent"
 ".claude/skills/**" = "agent"
-"docs/**"           = "documentation"
-"adr/**"            = "documentation"
-"*"                 = "documentation"
+"docs/**"           = "docs"
+"adr/**"            = "docs"
+"*"                 = "docs"
 ```
 
 The same value feeds `FaultEvent.domain` (Milestone 0006) so the report and the

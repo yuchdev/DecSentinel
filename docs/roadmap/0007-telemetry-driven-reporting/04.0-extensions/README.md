@@ -19,6 +19,6 @@ renderer, and prove it with two shipped examples.
 ## Definition of done
 
 - A document under `.claude/agents/` reports `domain: "agent"`, one under `docs/`
-  reports `"documentation"`, via `doc.ext.domain.name` and as `FaultEvent.domain`.
+  reports `"docs"`, via `doc.ext.domain.name` and as `FaultEvent.domain`.
 - `python:` extensions are refused without the explicit invoker opt-in.
 - A broken extension fails a report with exit 2 and never fails event emission.

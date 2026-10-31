@@ -44,7 +44,7 @@ FAULT_CLASSES: Final[dict[str, str]] = {
 UNMAPPED_FAULT_CLASS: Final[str] = "unmapped"
 
 #: Default content domain until an extension (``builtin:domain``) assigns one.
-DEFAULT_DOMAIN: Final[str] = "documentation"
+DEFAULT_DOMAIN: Final[str] = "docs"
 
 
 @dataclass(frozen=True)

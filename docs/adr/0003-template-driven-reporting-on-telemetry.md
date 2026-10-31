@@ -24,7 +24,7 @@ documents, `docs/reviews/docsentinel-docs-2026-10-26/`) showed the cost:
    narrowest of the three.
 3. **GitHub** carries no column, title, or document context.
 4. Adding any field means editing three renderers, and there is no way for a team
-   to add its own (for example a `domain` of `documentation` vs `agent`).
+   to add its own (for example a `domain` of `docs` vs `agent`).
 
 Milestone 0006 puts a `FaultEvent` in `src/docsentinel/telemetry.py`. The same
 facts (rule, fault class, tier, outcome, model, domain) are what the report
