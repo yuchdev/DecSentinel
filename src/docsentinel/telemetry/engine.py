@@ -23,8 +23,9 @@ Rendering semantics:
   non-empty output.
 * **json** -- the ``body`` is evaluated (``$var`` by type with ``$default`` for a
   null or absent value, ``$for``, ``$if``, ``$str``, ``$omit_if``) and serialized
-  with ``json.dumps(indent, ensure_ascii=True, sort_keys)``. ``ensure_ascii`` is
-  forced ``True`` whatever the template object says (threat model M8).
+  to the bytes of ``json.dumps(indent, ensure_ascii=True, sort_keys)``, streamed
+  piece by piece (R7). ``ensure_ascii`` is forced ``True`` whatever the template
+  object says (threat model M8).
 * **values** -- a variable is emitted through its filter chain; a string is emitted
   as-is and any other scalar in its JSON spelling (``null``, ``true``, ``3``). A
   variable absent from the context (an opt-in ``run`` that was not requested, an
@@ -51,6 +52,11 @@ Security contract (``docs/security/threat-model-0007-template-engine-2026-10-31.
   :data:`MAX_WORK_CHARS` even when a later filter (``len``) discards it, so false
   ``when`` conditions, loops over empty lists, ``$if``/``$omit_if`` and
   ``json|len`` cannot keep a render busy while staying under the output caps.
+  JSON output is serialized as a stream and every chunk is charged against
+  :data:`MAX_OUTPUT_CHARS` as it is produced, so ``indent`` and nesting cannot
+  build an indented document far past the cap before it is refused (R7). Each
+  container inside a ``$default`` costs one step, and a ``$default`` is copied
+  once per node, not once per loop item.
 * **M14 (render part)** -- substitution is single-pass: a substituted value is
   appended to the output and never re-scanned, so ``{run.id}`` or ``{{`` inside a
   message stays literal. There is no ``str.format``, ``format_map``, ``%``, ``eval``
@@ -71,6 +77,7 @@ from __future__ import annotations
 import json
 import math
 from collections.abc import Mapping, Sequence
+from json.encoder import encode_basestring_ascii
 from types import MappingProxyType
 from typing import Any, Final, Optional
 
@@ -119,6 +126,17 @@ MAX_STEPS: Final[int] = 2_000_000
 #: Cap on characters built by filters across one render (M13, R5), charged even
 #: when a later filter such as ``len`` discards the string.
 MAX_WORK_CHARS: Final[int] = 4 * MAX_OUTPUT_CHARS
+
+#: Largest transient chunk the streaming json serializer may build in one C call
+#: (R7). A sub-tree whose worst-case encoding could pass this is walked node by node.
+_FAST_CHUNK_CHARS: Final[int] = 1024 * 1024
+
+#: Worst-case encoded characters per lower-bound character of :func:`_size` (R7): a
+#: float prints up to 24 characters where :func:`_size` counts one.
+_WORST_EXPANSION: Final[int] = 24
+
+#: Serialized pieces collected before they are joined into one batch (R7).
+_FLUSH_PIECES: Final[int] = 1024
 
 #: Maximum characters of a variable name echoed in an error.
 _MAX_NAME_ECHO = 80
@@ -371,6 +389,199 @@ def _size(value: JsonValue, limit: int, memo: dict[int, tuple[JsonValue, int]]) 
     return min(memo[id(value)][1], cap)
 
 
+def _containers(value: Any) -> int:
+    """Return how many containers (lists, tuples, mappings) a template literal holds (R7).
+
+    :param value: A literal from the parsed template, frozen or thawed.
+    :returns: The container count, the value itself included.
+    """
+    count = 0
+    stack = [value]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, Mapping):
+            count += 1
+            stack.extend(item.values())
+        elif isinstance(item, (tuple, list)):
+            count += 1
+            stack.extend(item)
+    return count
+
+
+def _float_text(value: float) -> str:
+    """Return the ``json.dumps`` spelling of a float.
+
+    :param value: The float.
+    :returns: ``NaN``/``Infinity``/``-Infinity`` or ``float.__repr__``.
+    """
+    if value != value:
+        return "NaN"
+    if value == math.inf:
+        return "Infinity"
+    if value == -math.inf:
+        return "-Infinity"
+    return float.__repr__(value)
+
+
+class _JsonStream:
+    """Streaming json serializer that charges every chunk against a cap (R7).
+
+    The output is byte-identical to ``json.dumps(value, indent=indent,
+    ensure_ascii=True, sort_keys=sort_keys)``, but it is produced piece by piece
+    with an explicit stack, and each piece is counted as it is produced. The
+    serializer stops with a :class:`TemplateError` as soon as the total passes the
+    cap, so neither ``indent`` nor nesting can make it build more than the cap plus
+    one bounded chunk. A small sub-tree (worst case at most
+    :data:`_FAST_CHUNK_CHARS`) is encoded in one ``json.dumps`` call for speed:
+    any sub-tree without ``indent``, and a container of scalars only with
+    ``indent`` (its separator then carries the line break and padding).
+    """
+
+    __slots__ = ("_batches", "_indent", "_item_sep", "_limit", "_memo", "_pads", "_pieces", "_sort_keys", "_total")
+
+    def __init__(
+        self,
+        indent: Optional[int],
+        sort_keys: bool,
+        limit: int,
+        memo: Optional[dict[int, tuple[JsonValue, int]]] = None,
+    ):
+        """Prepare an empty stream.
+
+        :param indent: ``None`` or the indent width (0..8).
+        :param sort_keys: Whether object keys are sorted.
+        :param limit: The cap on serialized characters.
+        :param memo: A :func:`_size` memo to reuse, such as the one of the render
+            that built the value, so embedded sub-trees are not measured twice. Its
+            entries are exact lower bounds: a saturated entry only arises in a render
+            that has already stopped with a :class:`TemplateError`.
+        """
+        self._indent = indent
+        self._sort_keys = sort_keys
+        self._limit = limit
+        self._item_sep = ", " if indent is None else ","
+        self._pads: list[str] = []
+        self._pieces: list[str] = []
+        self._batches: list[str] = []
+        self._total = 0
+        self._memo: dict[int, tuple[JsonValue, int]] = {} if memo is None else memo
+
+    def _emit(self, text: str):
+        """Append one piece, charging it against the cap.
+
+        :param text: The serialized piece.
+        :raises TemplateError: When the total passes the cap.
+        """
+        self._total += len(text)
+        if self._total > self._limit:
+            raise TemplateError(f"rendering stopped: output larger than {self._limit} characters")
+        self._pieces.append(text)
+        if len(self._pieces) >= _FLUSH_PIECES:
+            self._batches.append("".join(self._pieces))
+            self._pieces.clear()
+
+    def _pad(self, level: int) -> str:
+        """Return the line break and indentation of ``level`` (``indent`` is set).
+
+        :param level: The nesting level.
+        :returns: ``"\\n"`` followed by ``indent * level`` spaces.
+        """
+        pads = self._pads
+        while len(pads) <= level:
+            pads.append("\n" + " " * (self._indent * len(pads)))
+        return pads[level]
+
+    def _fast(self, value: JsonValue, level: int) -> Optional[str]:
+        """Encode a small container in one call, or return ``None`` to walk it.
+
+        :param value: A non-empty list or dict.
+        :param level: Its nesting level.
+        :returns: Its exact serialization, or ``None`` when its worst case could pass
+            :data:`_FAST_CHUNK_CHARS` or (with ``indent``) it holds a container.
+        """
+        bound = _FAST_CHUNK_CHARS // _WORST_EXPANSION
+        if self._indent is None:
+            if 2 * len(value) > bound or _size(value, bound, self._memo) > bound:
+                return None
+            return json.dumps(value, ensure_ascii=True, sort_keys=self._sort_keys)
+        children = value.values() if type(value) is dict else value
+        if any(isinstance(child, (dict, list, tuple)) for child in children):
+            return None
+        inner = self._pad(level + 1)
+        if len(value) * (len(inner) + 1) > _FAST_CHUNK_CHARS or _size(value, bound, self._memo) > bound:
+            return None
+        body = json.dumps(value, ensure_ascii=True, sort_keys=self._sort_keys, separators=("," + inner, ": "))
+        return body[0] + inner + body[1:-1] + self._pad(level) + body[-1]
+
+    def _value(self, value: JsonValue, level: int, stack: list[list[Any]], prefix: str):
+        """Emit ``prefix`` and a scalar, or open a container frame on ``stack``.
+
+        :param value: The JSON value.
+        :param level: Its nesting level.
+        :param stack: Open container frames ``[iterator, is_dict, level, first]``.
+        :param prefix: Separator, padding and key text emitted before the value.
+        :raises TypeError: For a value that is not JSON data.
+        """
+        if isinstance(value, str):
+            self._emit(prefix + encode_basestring_ascii(value))
+        elif value is None:
+            self._emit(prefix + "null")
+        elif value is True:
+            self._emit(prefix + "true")
+        elif value is False:
+            self._emit(prefix + "false")
+        elif isinstance(value, int):
+            self._emit(prefix + int.__repr__(value))
+        elif isinstance(value, float):
+            self._emit(prefix + _float_text(value))
+        elif isinstance(value, (list, tuple, dict)):
+            is_dict = isinstance(value, dict)
+            if not value:
+                self._emit(prefix + ("{}" if is_dict else "[]"))
+                return
+            whole = self._fast(value, level) if type(value) in (list, dict) else None
+            if whole is not None:
+                self._emit(prefix + whole)
+                return
+            self._emit(prefix + ("{" if is_dict else "["))
+            members = (sorted(value.items()) if self._sort_keys else value.items()) if is_dict else value
+            stack.append([iter(members), is_dict, level + 1, True])
+        else:
+            raise TypeError("value is not JSON serializable")
+
+    def serialize(self, value: JsonValue) -> str:
+        """Serialize ``value`` in full, or stop at the cap.
+
+        :param value: The evaluated json body.
+        :returns: The serialized document.
+        :raises TemplateError: When the output passes the cap.
+        :raises TypeError: For a value or key that is not JSON data.
+        :raises ValueError: For an int too long to print.
+        """
+        stack: list[list[Any]] = []
+        self._value(value, 0, stack, "")
+        while stack:
+            frame = stack[-1]
+            items, is_dict, level, first = frame
+            item = next(items, _MISSING)
+            if item is _MISSING:
+                stack.pop()
+                closer = "}" if is_dict else "]"
+                self._emit(closer if self._indent is None else self._pad(level - 1) + closer)
+                continue
+            prefix = "" if first else self._item_sep
+            frame[3] = False
+            if self._indent is not None:
+                prefix += self._pad(level)
+            if is_dict:
+                key, item = item
+                if type(key) is not str:
+                    raise TypeError("keys must be str")
+                prefix += encode_basestring_ascii(key) + ": "
+            self._value(item, level, stack, prefix)
+        return "".join([*self._batches, *self._pieces])
+
+
 class _Lines:
     """Text output lines whose last (open) line is kept as a list of segments (R2).
 
@@ -434,6 +645,7 @@ class _Renderer:
         self._aliases: dict[str, JsonValue] = {}
         self._budget = _Budget()
         self._sizes: dict[int, tuple[JsonValue, int]] = {}
+        self._defaults: dict[int, tuple[JsonVar, JsonValue, int]] = {}
 
     def _bounded_size(self, value: JsonValue) -> int:
         """Return :func:`_size` of ``value`` against the remaining budget.
@@ -706,13 +918,11 @@ class _Renderer:
         if not isinstance(output, JsonOutput) or template.body is None:
             raise TemplateError("a json template needs a json output and a body")
         body = self._evaluate(template.body)
+        stream = _JsonStream(output.indent, output.sort_keys, MAX_OUTPUT_CHARS, self._sizes)
         try:
-            rendered = json.dumps(body, indent=output.indent, ensure_ascii=True, sort_keys=output.sort_keys)
+            return stream.serialize(body)
         except (TypeError, ValueError, RecursionError):
             raise TemplateError("the rendered json value could not be serialized") from None
-        if len(rendered) > MAX_OUTPUT_CHARS:
-            raise TemplateError(f"rendering stopped: output larger than {MAX_OUTPUT_CHARS} characters")
-        return rendered
 
     def _evaluate(self, node: JsonNode) -> JsonValue:
         """Evaluate one json template node; operators come from template nodes only (M14).
@@ -725,13 +935,15 @@ class _Renderer:
             self._budget.charge(self._bounded_size(node.value))
             return node.value
         if isinstance(node, JsonArray):
+            self._budget.charge(2 + max(len(node.items) - 1, 0))
             return [self._evaluate(item) for item in node.items]
         if isinstance(node, JsonObject):
             result: dict[str, JsonValue] = {}
+            self._budget.charge(2)
             for member in node.members:
                 if member.omit_if is not None and self._holds(member.omit_if):
                     continue
-                self._budget.charge(len(member.key) + 1)
+                self._budget.charge(len(member.key) + 1 + (1 if result else 0))
                 result[member.key] = self._evaluate(member.value)
             return result
         if isinstance(node, JsonVar):
@@ -755,6 +967,23 @@ class _Renderer:
             return self._interpolate(node.text)
         raise TemplateError("unknown json node")
 
+    def _default(self, node: JsonVar) -> tuple[JsonValue, int]:
+        """Return the thawed ``$default`` of a node and its container count, once per node (R7).
+
+        Every use shares one thawed copy, so a ``$default`` inside a loop neither
+        allocates nor pins (in the size memo) a fresh copy per item; the shared value
+        is only read, never mutated.
+
+        :param node: A ``$var`` node with a default.
+        :returns: The thawed default and how many containers it holds.
+        """
+        cached = self._defaults.get(id(node))
+        if cached is None:
+            fallback = _thaw(node.default)
+            cached = (node, fallback, _containers(fallback))
+            self._defaults[id(node)] = cached
+        return cached[1], cached[2]
+
     def _json_var(self, node: JsonVar) -> JsonValue:
         """Embed a context value by type; ``$default`` replaces a null or absent value.
 
@@ -765,7 +994,8 @@ class _Renderer:
         value = self._lookup(node.var)
         if value is _MISSING or value is None:
             if node.has_default:
-                fallback = _thaw(node.default)
+                fallback, containers = self._default(node)
+                self._budget.step(containers)
                 self._budget.charge(self._bounded_size(fallback))
                 return fallback
             if value is _MISSING:

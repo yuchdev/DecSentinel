@@ -1442,6 +1442,184 @@ def test_discarded_filter_results_under_the_work_budget_still_render(monkeypatch
     assert render_template(template, _context(enabled_rules=rules)) == str(len(json.dumps(rules))) * 2
 
 
+# --------------------------------------------------------------------------- M13 regressions (R7)
+
+
+def _nested_list(depth: int) -> Any:
+    """Return ``0`` wrapped in ``depth`` single-item lists."""
+    value: Any = 0
+    for _ in range(depth):
+        value = [value]
+    return value
+
+
+@contextlib.contextmanager
+def _peak_memory(limit: int) -> Iterator[None]:
+    """Fail the test if the block's traced peak allocation passes ``limit`` bytes."""
+    tracemalloc.start()
+    try:
+        yield
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert peak < limit, f"peak {peak} bytes"
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        pytest.param(
+            _json(
+                {
+                    "$for": "pending",
+                    "as": "a",
+                    "each": {"$for": "pending", "as": "b", "each": {"$var": "model", "$default": _nested_list(95)}},
+                },
+                output={"indent": 8},
+            ),
+            id="deep-default-nested-for-indent-8",
+        ),
+        pytest.param(
+            _json({"$for": "documents", "as": "d", "each": _nested_list(30)}, output={"indent": 8}),
+            id="template-array-depth-30-indent-8",
+        ),
+    ],
+)
+def test_json_indent_amplification_stops_at_the_cap_while_streaming(monkeypatch: pytest.MonkeyPatch, template: Any):
+    """
+    [Unit] engine: verifies indented json past MAX_OUTPUT_CHARS stops while it is serialized (R7).
+
+    Scenario:
+        Given ``MAX_OUTPUT_CHARS`` lowered to 1 MB and either a 95-deep ``$default`` under two nested
+            ``$for`` of 60 items, or a 30-deep template array under a ``$for`` of 5000 items, both
+            with ``indent: 8`` -- every budget passes at the compact size, but the indented output
+            is about 260M and 36M characters
+        When rendered
+        Then ``TemplateError`` about the output cap is raised within 20 s, with a traced peak under
+            40 MB (the old ``json.dumps`` built the whole indented string first).
+
+    Boundaries:
+        - Focus: regression: json was charged at its compact size and checked only after ``json.dumps``
+        - Fixtures/params: the auditor's two R7 shapes; lowered output cap
+        - Scope: render_template, ``engine._JsonStream``
+
+    On failure, first check:
+        - The ``_emit`` charge in ``_JsonStream`` and ``_FAST_CHUNK_CHARS`` gating in ``_JsonStream._fast``
+    """
+    monkeypatch.setattr(engine, "MAX_OUTPUT_CHARS", 1_000_000)
+    context = _context(pending=["p"] * 60, documents=[{}] * 5000)
+
+    with _deadline(20.0), _peak_memory(40_000_000), pytest.raises(TemplateError, match="output larger than 1000000"):
+        render_template(template, context)
+
+
+@pytest.mark.parametrize("indent", [None, 0, 1, 8])
+@pytest.mark.parametrize("sort_keys", [False, True])
+def test_streamed_json_is_byte_identical_to_json_dumps(indent: Any, sort_keys: bool):
+    """
+    [Unit] engine: verifies the streaming serializer reproduces ``json.dumps`` byte for byte (R7).
+
+    Scenario:
+        Given a value mixing empty, flat, nested, shared and large containers, every scalar type,
+            escapes, non-ASCII and non-BMP text
+        When it is rendered through ``$var`` with each ``indent`` and ``sort_keys``
+        Then the output equals ``json.dumps(value, indent, ensure_ascii=True, sort_keys)``.
+
+    Boundaries:
+        - Focus: normal case: streaming must not change any rendered byte
+        - Fixtures/params: indent None/0/1/8; sort_keys
+        - Scope: render_template, ``engine._JsonStream``
+
+    On failure, first check:
+        - The separators and padding in ``_JsonStream.serialize`` and ``_JsonStream._fast``
+    """
+    shared = {"z": [1, 2.5, -0.0, 10**30], "a": "x" + chr(0x0A) + chr(0xE9) + chr(0x1F600) + '"\\'}
+    value = {
+        "empty": [[], {}, ""],
+        "flat": [None, True, False, 0, "s"],
+        "shared": [shared, shared],
+        "deep": _nested_list(40),
+        "big": [{"k": list(range(30_000)), "b": "y" * 60_000}] * 2,
+        "b": {"y": 1, "x": {"q": [], "p": [{}]}},
+    }
+    template = _json({"$var": "model"}, output={"indent": indent, "sort_keys": sort_keys})
+
+    rendered = render_template(template, _context(model=value))
+
+    assert rendered == json.dumps(value, indent=indent, ensure_ascii=True, sort_keys=sort_keys)
+
+
+@pytest.mark.parametrize("indent", [None, 2])
+def test_streamed_json_cap_boundary_is_exact(monkeypatch: pytest.MonkeyPatch, indent: Any):
+    """
+    [Unit] engine: verifies json output of exactly MAX_OUTPUT_CHARS renders and one character more fails (R7).
+
+    Scenario:
+        Given the length N of a rendered json document
+        When rendered with ``MAX_OUTPUT_CHARS`` set to N, then to N - 1
+        Then the first render returns the same bytes and the second raises, never truncating.
+
+    Boundaries:
+        - Focus: edge case: the streamed cap is "more than N"
+        - Fixtures/params: indent None and 2
+        - Scope: render_template, ``_JsonStream._emit``
+
+    On failure, first check:
+        - The ``>`` comparison in ``_JsonStream._emit``
+    """
+    template = _json({"docs": {"$var": "documents"}}, output={"indent": indent})
+    expected = render_template(template, _context())
+
+    monkeypatch.setattr(engine, "MAX_OUTPUT_CHARS", len(expected))
+    assert render_template(template, _context()) == expected
+    monkeypatch.setattr(engine, "MAX_OUTPUT_CHARS", len(expected) - 1)
+    with pytest.raises(TemplateError, match=f"output larger than {len(expected) - 1}"):
+        render_template(template, _context())
+
+
+def test_json_default_is_thawed_once_and_its_containers_cost_steps(monkeypatch: pytest.MonkeyPatch):
+    """
+    [Unit] engine: verifies a ``$default`` is copied once per node and charged one step per container (R7).
+
+    Scenario:
+        Given a ``$for`` over 50 items whose ``$default`` is a 4-deep list, and the same with a scalar default
+        When both are rendered with ``_thaw`` and ``_Budget.step`` spied on
+        Then the output is correct, ``_thaw`` copies the default once (5 calls, not 250), and the
+            nested default costs exactly 4 more steps per item than the scalar one.
+
+    Boundaries:
+        - Focus: regression: every item thawed (and the size memo pinned) a fresh copy, and a deep
+            literal cost one step whatever its depth
+        - Fixtures/params: spies on ``engine._thaw`` and ``engine._Budget.step``
+        - Scope: render_template, ``_Renderer._default``
+
+    On failure, first check:
+        - The ``_defaults`` cache and the ``step(containers)`` charge in ``_Renderer._json_var``
+    """
+    calls = {"thaw": 0}
+    real = engine._thaw
+
+    def thaw(value: Any) -> Any:
+        """Count the call, then thaw."""
+        calls["thaw"] += 1
+        return real(value)
+
+    monkeypatch.setattr(engine, "_thaw", thaw)
+    total = _count_steps(monkeypatch)
+    context = _context(pending=["p"] * 50)
+
+    nested = render_template(
+        _json({"$for": "pending", "as": "p", "each": {"$var": "model", "$default": _nested_list(4)}}), context
+    )
+    nested_steps = total["steps"]
+    assert nested == json.dumps([_nested_list(4)] * 50)
+    assert calls["thaw"] == 5
+
+    total["steps"] = 0
+    render_template(_json({"$for": "pending", "as": "p", "each": {"$var": "model", "$default": 0}}), context)
+    assert nested_steps - total["steps"] == 4 * 50
+
+
 # --------------------------------------------------------------------------- determinism and sweep
 
 

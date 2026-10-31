@@ -566,3 +566,56 @@ Closed:
 - **R6 accepted.** The transient `ensure_ascii` expansion is at most 12 x min(input, cap), a
   constant factor of a context that is already in memory. The final length check still refuses
   any output past the cap. The optional non-ASCII estimate is not implemented.
+
+## Final re-audit of the renderer caps (security-auditor, 2026-10-31, at b308240)
+- R5 is verified closed for every shape in its test list. Steps are charged on nodes,
+  conditions, `in` operands (at most 256), loop items, lookups and filter calls. Filter chains are
+  charged by step and by work. Repeated json `$var` of a large list is charged its full bounded
+  size on every reference. The work budget (4 x 64 MiB) is cumulative, not resident: one filter
+  result is still refused above the remaining output cap. That memory risk is accepted.
+- Realistic margin: `tests/integration/test_template_renderer_report.py` passes (4 tests). At about
+  120k steps the cap leaves about 16x headroom.
+
+### [HIGH] R7 json `indent`/nesting amplification is charged at the compact size (CWE-400, CWE-770)
+- Vector: `engine.py:725,769,774` charge `_size`, which is a compact lower bound. The real
+  serialization is `json.dumps(..., indent=...)` at `engine.py:710`, and its length is checked only
+  after it is fully built (`:713`). With `indent` 1..8, each nested level costs `depth x indent`
+  more characters per line. A `$default` literal can be about 95 levels deep (`_MAX_RAW_DEPTH`) and
+  is one node, so 2 steps per item.
+- Evidence (scratchpad `r6_indent.py`, `r6_budget.py`): `$for` over a nested loop (480 x 480 docs)
+  with `{"$var":"model","$default":[[...95...]]}` and `indent: 8` passes every budget: 460k/2M
+  steps, 65.8M/67.1M chars. `json.dumps` would then build about 16.7 GB. Measured at 5000 items:
+  59 s and 1.2 GB RSS before the final post-check refused the output. Template-only JsonArray
+  nesting (depth 30) gives about 250x more characters than charged. The pure-Python encoder also
+  spends about depth^2 generator hops per item. Separately, `_thaw` makes a fresh copy for each
+  item and the `_sizes` memo pins every copy: 560 MB RSS at 20k items with compact output.
+- Impact: one hostile template can OOM-kill or stall a CI job while every budget passes. This is
+  the M13 gap that R5 was meant to close. R6 was accepted as a constant factor of in-memory
+  context. R7 is a template-controlled factor of about 250-380x, so R6's rationale does not apply.
+- Mitigation (python-expert): stream with `JSONEncoder(indent=..).iterencode` and charge each
+  chunk against the remaining cap, aborting at the cap; this also closes R6. Charge steps for each
+  container in a literal/default (or depth-weighted when `indent` is set). Thaw each `$default`
+  once per node, not per item (cache by node id). Tests (testing-expert): the deep-`$default` x
+  `$for` x `indent: 8` probe and the template-array depth-30 probe must raise `TemplateError`
+  within bounded time and memory.
+
+### Final verdict: BLOCK (M13 gate, no CRITICAL)
+- R7 is a HIGH bypass of the render budget. Story 02.0 stays out of `master` until R7 is fixed and
+  has regression tests. All other findings: R1-R3 and R5 closed, R4 tracked, R6 accepted.
+
+### Status update (python-expert, 2026-10-31, R7)
+- **R7 fixed.** `telemetry/engine.py` now streams json output through `_JsonStream`, an
+  explicit-stack serializer with the same bytes as `json.dumps(indent, ensure_ascii=True,
+  sort_keys)`. Each chunk is charged as it is produced, and passing `MAX_OUTPUT_CHARS` raises
+  `TemplateError`. One chunk built through C `json.dumps` is a sub-tree whose worst case is at most
+  1 MiB. This is any small sub-tree without `indent`, or a container of scalars with `indent`. This
+  also closes R6.
+- Each container inside a `$default` costs one step. A `$default` is thawed once per node and
+  shared, not copied per item. Template arrays and objects are charged their brackets and commas.
+- Probes at the fix: the deep-`$default` x 140x140 x `indent: 8` shape stops in 0.5-1.8 s at about
+  90 MB RSS. Depth-30 template arrays x 60000 with `indent: 8` stop in about 4 s. The remaining
+  memory is the evaluated body, which `MAX_STEPS` bounds.
+- Regression tests in `tests/unit/test_telemetry_engine.py`: both R7 shapes run under a lowered
+  cap with time and traced-peak bounds, and both fail on b308240. The tests also cover
+  byte-identity with `json.dumps` across indent and `sort_keys`, the exact cap boundary, and
+  thaw-once with step charging.
