@@ -172,6 +172,9 @@ def detect(root: Path, documents: tuple[models.Document, ...]) -> tuple[models.F
                     message=f"unresolvable path -> {candidate}",
                     severity=DS103.severity,
                     line=line,
+                    column=match.start(1) - (text.rfind("\n", 0, start) + 1) + 1,
+                    value=candidate,
+                    type="unresolvable path",
                 )
             )
     return tuple(findings)

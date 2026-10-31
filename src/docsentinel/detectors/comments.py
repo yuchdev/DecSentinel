@@ -82,6 +82,8 @@ def detect(root: Path, documents: tuple[models.Document, ...]) -> tuple[models.F
                     message=f"stray HTML comment: {display_text}",
                     severity=DS102.severity,
                     line=line,
+                    column=start - (text.rfind("\n", 0, start) + 1) + 1,
+                    type="stray html comment",
                 )
             )
     return tuple(findings)

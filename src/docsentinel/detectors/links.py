@@ -110,6 +110,28 @@ def _lexical_target(target_path: str, source: Path, root: Path) -> Path:
     return source.parent / target_path
 
 
+def _strip_code_spans(raw_line: str) -> tuple[str, list[int]]:
+    """Remove inline code spans and map each kept character to its raw-line offset.
+
+    The returned text is exactly ``_CODE_SPAN_RE.sub("", raw_line)`` (so link
+    matching is unchanged); the offset list lets a match position in it be reported
+    as a column of the original line.
+
+    :param raw_line: One source line.
+    :returns: The stripped line and, per stripped character, its 0-based raw offset.
+    """
+    kept: list[str] = []
+    offsets: list[int] = []
+    cursor = 0
+    for span in _CODE_SPAN_RE.finditer(raw_line):
+        kept.append(raw_line[cursor : span.start()])
+        offsets.extend(range(cursor, span.start()))
+        cursor = span.end()
+    kept.append(raw_line[cursor:])
+    offsets.extend(range(cursor, len(raw_line)))
+    return "".join(kept), offsets
+
+
 def check_document(root: Path, document: models.Document) -> tuple[models.Finding, ...]:
     """Return dangling link and anchor findings for one Markdown document."""
     source = root / document.path
@@ -130,12 +152,15 @@ def check_document(root: Path, document: models.Document) -> tuple[models.Findin
         if in_fence:
             continue
 
-        line = _CODE_SPAN_RE.sub("", raw_line)
-        for raw_target in _LINK_RE.findall(line):
+        line, offsets = _strip_code_spans(raw_line)
+        for link in _LINK_RE.finditer(line):
+            raw_target = link.group(1)
             target_parts = raw_target.split()
             target = target_parts[0] if target_parts else ""
             if _is_skippable(target):
                 continue
+            # 1-based column of the target in the original (unstripped) line.
+            column = offsets[link.start(1) + len(raw_target) - len(raw_target.lstrip())] + 1
 
             # Security skip (lexical, no filesystem access): a target that escapes
             # the root or is an unsafe DS116-owned category (drive/UNC/backslash/
@@ -156,6 +181,9 @@ def check_document(root: Path, document: models.Document) -> tuple[models.Findin
                             message=f"missing anchor '#{anchor}' in this file",
                             severity=DS101.severity,
                             line=line_number,
+                            column=column,
+                            value=target,
+                            type="dangling anchor",
                         )
                     )
                 continue
@@ -175,6 +203,9 @@ def check_document(root: Path, document: models.Document) -> tuple[models.Findin
                         message=f"dangling link -> {target}",
                         severity=DS101.severity,
                         line=line_number,
+                        column=column,
+                        value=target,
+                        type="dangling link",
                     )
                 )
                 continue
@@ -188,6 +219,9 @@ def check_document(root: Path, document: models.Document) -> tuple[models.Findin
                             message=f"missing anchor '#{anchor}' in {file_part}",
                             severity=DS101.severity,
                             line=line_number,
+                            column=column,
+                            value=target,
+                            type="dangling anchor",
                         )
                     )
     return tuple(findings)

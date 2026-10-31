@@ -20,6 +20,7 @@ import json
 from dataclasses import asdict
 
 from docsentinel.models import ScanResult
+from docsentinel.telemetry.model import ADVISORY_BANNER  # re-exported for existing callers
 
 
 def _escaped(code_point: int) -> str:
@@ -85,7 +86,6 @@ def _neutralize_controls(value: str, *, keep_crlf: bool = False) -> str:
     return value.translate(_GITHUB_CONTROL_TABLE if keep_crlf else _TEXT_CONTROL_TABLE)
 
 
-
 def neutralize_text(value: str) -> str:
     """Return ``value`` with unsafe control, format and surrogate code points escaped.
 
@@ -97,6 +97,7 @@ def neutralize_text(value: str) -> str:
     :returns: The text with every unsafe code point rendered as a visible escape.
     """
     return _neutralize_controls(value)
+
 
 def _escape_property(value: str) -> str:
     """Escape a GitHub Actions workflow command property value.
@@ -138,7 +139,27 @@ def _render_github(result: ScanResult) -> str:
     return "\n".join(lines)
 
 
-ADVISORY_BANNER: str = "Deep findings are heuristic candidates for review - they do not fail the build."
+#: ``ScanResult`` fields added after JSON schema v1 (Milestone 0007); the v1 JSON
+#: sink drops them so its output stays byte-identical. They reach reports through
+#: :class:`~docsentinel.telemetry.model.ReportModel` instead.
+_V1_EXCLUDED_RESULT_KEYS: tuple[str, ...] = ("rules_evaluated", "opt_in_off")
+#: ``Finding`` enrichment fields added after JSON schema v1, dropped likewise.
+_V1_EXCLUDED_FINDING_KEYS: tuple[str, ...] = ("column", "value", "type")
+
+
+def _schema_v1_dict(result: ScanResult) -> dict[str, object]:
+    """Return ``asdict(result)`` restricted to the JSON schema v1 keys.
+
+    :param result: Completed scan to serialize.
+    :returns: The v1 mapping, without any post-v1 ``ScanResult``/``Finding`` field.
+    """
+    data = asdict(result)
+    for key in _V1_EXCLUDED_RESULT_KEYS:
+        data.pop(key, None)
+    for finding in data["findings"]:
+        for key in _V1_EXCLUDED_FINDING_KEYS:
+            finding.pop(key, None)
+    return data
 
 
 def render(result: ScanResult, format: str = "text") -> str:
@@ -162,7 +183,7 @@ def render(result: ScanResult, format: str = "text") -> str:
         If ``format`` is not a supported output format.
     """
     if format == "json":
-        data = asdict(result)
+        data = _schema_v1_dict(result)
         if result.profile == "deep" and result.findings:
             data["advisory"] = ADVISORY_BANNER
         return json.dumps(data, indent=2)
