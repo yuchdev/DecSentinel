@@ -62,10 +62,15 @@ template.json --> loader/validator --> renderer(template, context) --> str
 ```json
 {
   "type": "text",
-  "output": { "join": "\n", "trailing_newline": false },
+  "output": { "join": "\n", "trailing_newline": false, "sink": "terminal" },
   "lines": [ <node>, ... ]
 }
 ```
+
+In `output`, `join` may only be `"\n"`, and `sink` is `"terminal"` (default) or `"github"`;
+`sink` selects which filters count as sinks (Section 8); a line starting with `::` requires
+`"github"`. No template string or key may contain a code point that `neutralize`
+escapes (controls, CR/LF, bidi, zero-width, separators, lone surrogates).
 
 ### Node types
 
@@ -154,6 +159,7 @@ Operators: `eq`, `ne`, `in`, `gt`, `lt`, `truthy`, `falsy`.
 | `{"$str": "{doc.path}:{p.line}"}` | Interpolated string (same variable syntax, filters allowed). |
 | `{"$omit_if": <cond>, "value": <value>}` | Inside an object, drop the key when the condition holds. |
 
+In `output`, `indent` is `null` or an integer 0..8, and `ensure_ascii` must be `true` in v1.
 `ensure_ascii=true` is the safety property of the JSON sink: every control and
 non-ASCII code point is escaped by serialization, so no `neutralize` filter is
 needed (and none is applied, preserving JSON v1 behaviour).
@@ -252,6 +258,15 @@ extension filter declared as a sink) **before it is emitted**. Otherwise the
 loader raises `TemplateError` -- an author cannot forget escaping, and a custom
 template cannot reintroduce the log-forging / Trojan-Source holes the current
 renderer closes. `json` templates are exempt: serialization is the sink.
+
+The rule is checked strictly (threat model T1/T2):
+
+- A list element (a loop alias) inherits the list's trust. A container with no tag of its
+  own is untrusted when any member is untrusted.
+- Dicts, and lists not reduced by `join`/`len`/`json`, cannot be emitted in text.
+- The chain must **end** with the sink, so `{p.message|neutralize|upper}` is rejected.
+- With `"sink": "github"` in `output`, only `gha_property`/`gha_data` count as sinks. An
+  untrusted variable before the second `::` of a command line needs `gha_property`.
 
 ## 9. Extensions (variables, calculations, filters)
 
