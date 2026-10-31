@@ -21,9 +21,15 @@ its every byte is hostile input. Mitigations implemented here:
   untrusted variable must *end* with a sink filter for the declared
   ``output.sink``: ``neutralize``/``json``/``gha_property``/``gha_data`` under
   ``terminal``, only ``gha_property``/``gha_data`` under ``github``. In a ``github``
-  line that starts with ``::``, an untrusted variable before the second ``::`` (the
-  property segment) must end with ``gha_property``. A ``terminal`` template may not
-  start a line with ``::``, so a workflow-command template cannot omit its sink.
+  line that starts with ``::``, every variable (trusted ones included) before the
+  second ``::`` (the property segment) must end with ``gha_property``; an ``append``
+  loop continues an unknown line, so all its variables need ``gha_property``. Under
+  ``github`` every emitted line carrying a variable (``line`` nodes, inline loops
+  including ``append``) must start with literal text that, after leading whitespace
+  is trimmed, is neither empty nor a lone ``:`` -- so a finding message or path can
+  never begin a line and become a live workflow command. A ``terminal`` template may
+  not start a line with ``::`` (leading whitespace ignored), so a workflow-command
+  template cannot omit its sink.
 * **M7/M8 -- literal hygiene.** No template string (key or value) may contain a code
   point the ``neutralize`` table escapes, CR/LF included; ``output.join`` may only be
   ``"\\n"``. ``output.indent`` is ``null`` or an int in 0..8 and ``ensure_ascii`` must
@@ -71,7 +77,7 @@ import stat
 from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import lru_cache
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from types import MappingProxyType
 from typing import Any, Final, Optional, Union
 
@@ -1114,36 +1120,75 @@ class _Validator:
             element_kind = None
         if kind != _SCALAR:
             raise self.fail(where, f"{_echo(ref.name)} is a {kind}; reduce it with join, len or json before output")
-        if self._type != "text" or not _untrusted(var):
+        if self._type != "text":
             return
         last = ref.filters[-1].name if ref.filters else ""
+        # Every variable in a command property segment, trusted ones included (a
+        # trusted ``model`` id may carry ``:``), must be escaped for that segment.
+        if property_segment and last != "gha_property":
+            raise self.fail(where, f"variable {_echo(ref.name)} in a command property needs gha_property")
+        if not _untrusted(var):
+            return
         if not last or self._sink not in FILTERS[last].sinks:
             raise self.fail(
                 where,
                 f"untrusted variable {_echo(ref.name)} must end its filter chain with a {self._sink} sink filter",
             )
-        if property_segment and last != "gha_property":
-            raise self.fail(where, f"untrusted variable {_echo(ref.name)} in a command property needs gha_property")
 
-    def _emitted_text(self, raw: Any, where: str, scope: Scope, *, line: bool) -> Interpolation:
+    def _emitted_text(
+        self,
+        raw: Any,
+        where: str,
+        scope: Scope,
+        *,
+        line_prefix: Optional[str] = None,
+        repeated: bool = False,
+        append: bool = False,
+    ) -> Interpolation:
         """Parse and check an emitted string (line/loop ``text`` or ``$str``).
+
+        Under ``output.sink: github`` an emitted line that carries a variable must
+        start with literal text that cannot become ``::`` (T2): GitHub trims leading
+        whitespace before matching a workflow command, so a line led by a variable
+        (or by only whitespace or a lone ``:``) could be turned into a live command
+        such as ``::stop-commands::`` by a finding message or path.
 
         :param raw: The raw string.
         :param where: Its JSON path.
         :param scope: Visible names.
-        :param line: Whether the string starts an output line (workflow-command rule).
+        :param line_prefix: Literal emitted before ``raw`` at the start of an output
+            line (``""`` for a ``line`` node, the loop ``prefix`` for an inline loop),
+            or ``None`` when ``raw`` never starts a line (``$str``).
+        :param repeated: Whether ``raw`` is an inline loop's per-item text, so its
+            segment within a command line is judged from ``line_prefix`` alone.
+        :param append: Whether ``raw`` continues an unknown previous line, so under
+            the ``github`` sink every variable is treated as a property segment.
         :returns: The parsed interpolation.
         """
         interpolation = self._interpolation(raw, where)
-        command = line and self._type == "text" and raw.startswith("::")
+        parts = interpolation.parts
+        if line_prefix is None or self._type != "text":
+            for part in parts:
+                if not isinstance(part, str):
+                    self._check_ref(part, scope, where, property_segment=False)
+            return interpolation
+        first = parts[0] if parts and isinstance(parts[0], str) else ""
+        lead = (line_prefix + first).lstrip()
+        command = lead.startswith("::")
         if command and self._sink != SINK_GITHUB:
             raise self.fail(where, 'a line starting with "::" requires output.sink "github"')
-        markers = 0
-        for part in interpolation.parts:
+        github = self._sink == SINK_GITHUB
+        has_variables = any(not isinstance(part, str) for part in parts)
+        if github and has_variables and lead in ("", ":"):
+            raise self.fail(where, 'under output.sink "github" an emitted line must start with literal text')
+        markers = line_prefix.count("::")
+        for part in parts:
             if isinstance(part, str):
-                markers += part.count("::")
-            else:
-                self._check_ref(part, scope, where, property_segment=command and markers < 2)
+                if not repeated:
+                    markers += part.count("::")
+                continue
+            property_segment = github if append else command and markers < 2
+            self._check_ref(part, scope, where, property_segment=property_segment)
         return interpolation
 
     def _variables_used(self, raw: Any, where: str, interpolation: Interpolation) -> frozenset[str]:
@@ -1254,7 +1299,7 @@ class _Validator:
                 raw, where, frozenset({"type", "text", "variables_used", "when"}), frozenset({"text", "variables_used"})
             )
             when = self._when(obj, where, scope, depth)
-            text = self._emitted_text(obj["text"], f"{where}.text", scope, line=True)
+            text = self._emitted_text(obj["text"], f"{where}.text", scope, line_prefix="")
             used = self._variables_used(obj["variables_used"], f"{where}.variables_used", text)
             return LineNode(text, used, when)
         if node_type == "group":
@@ -1306,13 +1351,20 @@ class _Validator:
         if placement == PLACEMENT_BLOCK:
             body = self._text_nodes(obj["body"], f"{where}.body", inner, depth + 1, loops + 1)
             return LoopNode(over, alias, placement, when, body=body)
-        text = self._emitted_text(obj["text"], f"{where}.text", inner, line=False)
-        used = self._variables_used(obj["variables_used"], f"{where}.variables_used", text)
         separator = self._string(obj.get("separator", ""), f"{where}.separator")
         prefix = self._string(obj.get("prefix", ""), f"{where}.prefix")
         suffix = self._string(obj.get("suffix", ""), f"{where}.suffix")
-        if placement == PLACEMENT_ONE_LINE and prefix.startswith("::") and self._sink != SINK_GITHUB:
-            raise self.fail(f"{where}.prefix", 'a line starting with "::" requires output.sink "github"')
+        # An ``append`` result starts a line when no (or an empty) line precedes it,
+        # so both inline placements get the line-start checks (T2, M5).
+        text = self._emitted_text(
+            obj["text"],
+            f"{where}.text",
+            inner,
+            line_prefix=prefix,
+            repeated=True,
+            append=placement == PLACEMENT_APPEND,
+        )
+        used = self._variables_used(obj["variables_used"], f"{where}.variables_used", text)
         return LoopNode(over, alias, placement, when, text, separator, prefix, suffix, used)
 
     # ---- json values
@@ -1387,7 +1439,7 @@ class _Validator:
             return JsonIf(condition, then, otherwise)
         if "$str" in raw:
             obj = self._object(raw, where, frozenset({"$str"}), frozenset({"$str"}))
-            return JsonStr(self._emitted_text(obj["$str"], f"{where}.$str", scope, line=False))
+            return JsonStr(self._emitted_text(obj["$str"], f"{where}.$str", scope))
         if "$omit_if" in raw:
             raise self.fail(where, "$omit_if is only valid as the value of an object member")
         unknown = frozenset(key for key in raw if key.startswith("$"))
@@ -1552,7 +1604,7 @@ def _load_by_name(name: str, root: Optional[Path], templates_dir: Optional[str])
     if root is None:
         raise TemplateError("report_templates_dir needs a scan root")
     canonical = Path(root).resolve()
-    configured = f"{templates_dir.rstrip('/')}/{name}.json"
+    configured = str(PurePosixPath(templates_dir) / f"{name}.json")
     _check_contained(canonical, templates_dir, "report_templates_dir")
     _check_contained(canonical, configured, "report template")
     candidate = canonical / configured

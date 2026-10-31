@@ -78,7 +78,14 @@ two HIGH items are gaps where a literal reading of the spec gives a bypass.
   - **M6:** under `github`, only `gha_property`/`gha_data` count as sinks. `neutralize`
     and `json` do not.
   - SHOULD: in a `github` line, a variable in the property segment (before the second
-    `::`) requires `gha_property`.
+    `::`) requires `gha_property`. Implemented for every variable, trusted ones
+    included (a trusted `model` id may carry `:`); an `append` loop continues an
+    unknown line, so all its variables need `gha_property`.
+  - Line start (security review): under `github`, every emitted line that carries a
+    variable (`line` nodes, block-loop body lines, `one-line` and `append` loops) must
+    start with literal text that, after trimming leading whitespace, is neither empty
+    nor a lone `:`. Otherwise a finding message such as `::stop-commands::` would begin
+    a line and run as a live workflow command.
   - Owner: Task 01 (rule), Task 02 (golden test that packaged `github.json` uses
     `gha_property` for `file=` and `gha_data` for the message). Tests:
     `{p.message|neutralize|upper}` rejected; `{doc.path|neutralize}` rejected in a
@@ -128,6 +135,12 @@ two HIGH items are gaps where a literal reading of the spec gives a bypass.
     for `S_ISREG` and size <= 256 KiB. Read `MAX + 1` bytes and reject (not truncate)
     if larger. Decode with strict UTF-8 and reject a BOM.
   - argv paths get the same regular-file/size/encoding gate but no containment.
+  - Accepted residual risk: `O_NOFOLLOW` guards only the final path component, so an
+    intermediate directory swapped for a symlink between the containment check and the
+    open (TOCTOU) is not caught; and on Windows `os.O_NOFOLLOW` does not exist, so the
+    flag is a no-op there. Both need write access to the scanned checkout during the
+    scan, which already controls the template, so they are accepted rather than fixed
+    with `openat`-style directory-fd walking.
   - Owner: Task 01. Tests:
     - mock: out-of-root dir, `../` name, symlink-out file and FIFO are refused
       without `open`;

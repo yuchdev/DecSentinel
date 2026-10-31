@@ -265,8 +265,12 @@ The rule is checked strictly (threat model T1/T2):
   own is untrusted when any member is untrusted.
 - Dicts, and lists not reduced by `join`/`len`/`json`, cannot be emitted in text.
 - The chain must **end** with the sink, so `{p.message|neutralize|upper}` is rejected.
-- With `"sink": "github"` in `output`, only `gha_property`/`gha_data` count as sinks. An
-  untrusted variable before the second `::` of a command line needs `gha_property`.
+- With `"sink": "github"` in `output`, only `gha_property`/`gha_data` count as sinks. Any
+  variable (trusted or not) before the second `::` of a command line needs
+  `gha_property`, and so does every variable of an `append` loop.
+- With `"sink": "github"`, every emitted line that holds a variable (including inline
+  loops, whose `prefix` counts) must start with literal text that is neither empty nor a
+  lone `:` once leading whitespace is trimmed. So `{p.message|gha_data}` cannot start a line.
 
 ## 9. Extensions (variables, calculations, filters)
 

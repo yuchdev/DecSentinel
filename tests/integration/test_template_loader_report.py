@@ -62,6 +62,50 @@ def test_named_template_loads_from_templates_dir(template_root: Path):
     assert str(template_root) not in template.source
 
 
+@pytest.mark.parametrize("templates_dir", ["templates/", "templates//", "./templates", "./templates/"])
+def test_templates_dir_spelling_is_normalized(template_root: Path, templates_dir: str):
+    """
+    [Integration] loader: verifies equivalent ``report_templates_dir`` spellings join to one configured path.
+
+    Scenario:
+        Given ``report_templates_dir`` spelled with a trailing slash, a doubled slash or a ``./`` lead
+        When ``mini`` is loaded through it
+        Then the template loads and its source is the normalized ``templates/mini.json``.
+
+    Boundaries:
+        - Focus: ``_load_by_name`` join normalization (security review follow-up, replaces ``rstrip('/')``)
+        - Fixtures/params: report/template_dir, one spelling per case
+        - Scope: load_template over real files
+
+    On failure, first check:
+        - The ``PurePosixPath`` join in ``loader._load_by_name``
+    """
+    template = load_template("mini", root=template_root, templates_dir=templates_dir)
+
+    assert template.source == "templates/mini.json"
+
+
+def test_root_templates_dir_never_joins_to_an_absolute_path(template_root: Path):
+    """
+    [Integration] loader: verifies ``report_templates_dir="/"`` is refused, never joined to ``/mini.json``.
+
+    Scenario:
+        Given ``report_templates_dir`` set to ``/``
+        When ``mini`` is loaded through it
+        Then TemplateError is raised by the containment gate.
+
+    Boundaries:
+        - Focus: ``_load_by_name`` join normalization edge (``rstrip('/')`` left an empty directory)
+        - Fixtures/params: report/template_dir
+        - Scope: load_template over real files
+
+    On failure, first check:
+        - ``loader._check_contained`` on the directory before the join is used
+    """
+    with pytest.raises(TemplateError, match="escapes the scan root"):
+        load_template("mini", root=template_root, templates_dir="/")
+
+
 def test_repository_template_cannot_shadow_packaged_name(template_root: Path, packaged_dir: Path):
     """
     [Integration] loader: verifies a repo ``text.json`` in ``report_templates_dir`` never overrides the packaged one.
