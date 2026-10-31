@@ -354,3 +354,27 @@ Story 02.0 stays out of `master` until T2-R1 is fixed and tested.
   `docs/user/tutorial/report.md` ("Hostile characters in paths and messages") now
   recommend `--format github` in Actions, or wrapping text output in
   `::stop-commands::<random>`.
+
+### Re-attack of T2-R1 (security-auditor, 2026-10-31, at fcb9c42)
+About 50 probes went through `validate_template`. No data-driven command or `##[` forgery was accepted.
+- Trusted text values cannot carry `#`, `[`, `]`, CR or LF: `model` (charset), `run.id` (hex),
+  `run.generated_at`, `profile` (enum), `notice`, `advisory`, and the rule/fault-class
+  strings (checked against all 17 registered rules). `{enabled_rules|json}` and
+  `{opt_in_off|json}` can start with `[`, but `##[` followed by them gives an unregistered name.
+- Rejected: untrusted values through `default`/`lower`/`len`/`join`/`json`, then `gha_data`
+  on a plain line; tab or `:` leads; `endgroup`/`groupx`/`ERROR`; a command with no second `::`;
+  gha_data used as a property / gha_property used as data; any `append` that carries untrusted
+  values; a `#` at the end of a prefix, an item, a separator or an append prefix.
+- Inline `::` counting can only undercount (fail closed). A runner split earlier than the
+  validator's split only moves variables from the property segment into the data segment.
+- The standard shape is expressible: one `line` per severity, routed by
+  `when {"var":"p.severity","eq":"error"|"warning"}`; `::group::{...|gha_data}` titles also pass.
+- [INFO] `default('…')`/`join('…')` arguments are not covered by `_reject_hash_join`
+  (`x{model|default('##')}[error]y` is accepted). They are author literals, the same as
+  T3's accepted literal `##[`, so there is no new capability.
+- [FOLLOW-UP] Extension variables (`ext.*`, and `telemetry_domains` values from the scanned
+  repo's config) must be tagged untrusted when §9 lands, or they reopen T2-R1 on plain lines.
+- [ASSUMPTION] The defense relies on runner V2 parsing not failing on a well-formed line
+  (a failure falls back to legacy). gha_property escaping keeps properties parseable.
+
+### Re-attack verdict: PASS (T2-R1 closed; follow-up above tracked for the extensions task)

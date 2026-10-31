@@ -8,7 +8,7 @@
 | Story | Name | State | Tests executed |
 |---|---|---|---|
 | 01.0 | Telemetry package and report model | ✅ Complete (2/2 tasks) | Full suite 2679 passed, 9 skipped; self-scan exit 0; `uv build` ok; feature-reviewer LGTM; task-verifier PARTIAL (no blocking gaps, see notes) |
-| 02.0 | Template engine | ⬜ Not started | — |
+| 02.0 | Template engine | 🔶 In progress (1/2 tasks) | Task 01 loader: 2907 passed + 261 targeted after two security fix rounds; security-auditor PASS (T2-R1 mitigated), feature-reviewer LGTM, task-verifier PASS |
 | 03.0 | Standard templates and cutover | ⬜ Not started | — |
 | 04.0 | Extensions | ⬜ Not started | — |
 | 05.0 | Tests, docs, acceptance | ⬜ Not started | — |
@@ -45,3 +45,4 @@
 **Tests / gate:** 2643 -> 2679 passed (9 skipped); goldens unchanged across the restructure; self-scan 0; `uv build` ok; docs link check 0 problems.
 
 **Reconciliation:** both task specs consumed as written; extra shared module `classify.py` and extra `build()` keyword arguments (`strict`, `model`, `report_include_run_meta`, `report_schema_version`) are supersets, not departures.
+- 2026-10-31: Story 02.0 Task 01 (loader) done: `fb5e11a`, `5b9704d`, `fcb9c42`, threat model `docs/security/threat-model-0007-template-engine-2026-10-31.md`. Review found the github-sink injection (variable-first line; then legacy `##[` fallback); fixed with the rule that untrusted variables appear only in well-formed `::error|warning|notice|debug|group` command lines (spec section 8). Follow-ups: (a) Story 04.0 must tag `ext.*` and `telemetry_domains` values untrusted; (b) Task 02 must test `gha_data` escaping of `%`/CR/LF, the render-purity patch test (M13/M14) and a severity-routing github template (conditions with literal command names); (c) `terminal` sink is an accepted risk (T2-R2): user docs recommend `--format github` in Actions (added to `docs/user/tutorial/report.md`); (d) `tests/mock/test_standard_loader.py::test_ensure_standard_loaded_is_idempotent_on_success` fails when run alone at the Story 01.0 base too (order-dependent, pre-existing) and two wall-clock tests in `tests/unit/test_timing_helpers.py` failed once each under load; (e) `_emitted_text` in `loader.py` is long, extract the `well_formed` computation when touched again; (f) the loader reads `neutralize_text` from `reporting.py`, repoint to `filters.neutralize` in Task 02.
