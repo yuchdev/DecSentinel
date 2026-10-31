@@ -22,12 +22,18 @@ its every byte is hostile input. Mitigations implemented here:
   ``output.sink``: ``neutralize``/``json``/``gha_property``/``gha_data`` under
   ``terminal``, only ``gha_property``/``gha_data`` under ``github``. In a ``github``
   line that starts with ``::``, every variable (trusted ones included) before the
-  second ``::`` (the property segment) must end with ``gha_property``; an ``append``
-  loop continues an unknown line, so all its variables need ``gha_property``. Under
-  ``github`` every emitted line carrying a variable (``line`` nodes, inline loops
-  including ``append``) must start with literal text that, after leading whitespace
-  is trimmed, is neither empty nor a lone ``:`` -- so a finding message or path can
-  never begin a line and become a live workflow command. A ``terminal`` template may
+  second ``::`` (the property segment) must end with ``gha_property``, and an
+  untrusted one after it with ``gha_data``; an ``append`` loop continues an unknown
+  line, so all its variables need ``gha_property``. Under ``github`` every emitted
+  line carrying a variable (``line`` nodes, inline loops including ``append``) must
+  start with literal text that, after leading whitespace is trimmed, is neither empty
+  nor a lone ``:`` -- so a finding message or path can never begin a line and become
+  a live workflow command. Because the runner's legacy parser matches ``##[``
+  anywhere in a line that is not a well-formed command (T2-R1), an untrusted
+  variable may only sit on a line opening with a literal ``::error``/``warning``/
+  ``notice``/``debug``/``group`` (then a space or ``::``) that holds a literal second
+  ``::``; plain lines and ``append`` loops may carry only trusted variables, and no
+  variable may directly follow a literal ending in ``#``. A ``terminal`` template may
   not start a line with ``::`` (leading whitespace ignored), so a workflow-command
   template cannot omit its sink.
 * **M7/M8 -- literal hygiene.** No template string (key or value) may contain a code
@@ -144,6 +150,10 @@ _EXTENSION_PATTERN = re.compile(r"[a-z][a-z0-9_]{0,63}")
 _SEGMENT_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}")
 _INDEX_PATTERN = re.compile(r"[0-9]{1,6}")
 _FILTER_NAME_PATTERN = re.compile(r"[a-z_][a-z0-9_]{0,63}(?:\.[a-z_][a-z0-9_]{0,63}){0,3}")
+#: A well-formed workflow command opener (T2-R1): ASCII spaces only (a strict subset
+#: of what the runner's ``TrimStart`` removes), ``::``, a literal command name from a
+#: closed allowlist, then a literal space or the second ``::``.
+_GHA_COMMAND_PATTERN = re.compile(r" *::(?:error|warning|notice|debug|group)(?: |::)")
 
 _UTF8_BOM = b"\xef\xbb\xbf"
 
@@ -1097,13 +1107,26 @@ class _Validator:
             raise self.fail(where, "a filter takes exactly one quoted argument followed by ')'")
         return argument, close + 2
 
-    def _check_ref(self, ref: VarRef, scope: Scope, where: str, *, property_segment: bool):
+    def _check_ref(
+        self,
+        ref: VarRef,
+        scope: Scope,
+        where: str,
+        *,
+        property_segment: bool,
+        command_line: bool = True,
+        data_segment: bool = False,
+    ):
         """Check one emitted reference: filters, M3 scalar rule and M4-M6 trust rule.
 
         :param ref: The reference.
         :param scope: Visible names.
         :param where: The JSON path for errors.
         :param property_segment: Whether it sits in a GitHub command property segment.
+        :param command_line: ``False`` when, under the ``github`` sink, it sits on a
+            line not proven to be a well-formed workflow command, so it must be trusted.
+        :param data_segment: Whether it sits after the second ``::`` of a well-formed
+            command, so an untrusted value must end with ``gha_data``.
         """
         var = self._resolve(ref, scope, where)
         kind = _kind(var)
@@ -1134,6 +1157,16 @@ class _Validator:
                 where,
                 f"untrusted variable {_echo(ref.name)} must end its filter chain with a {self._sink} sink filter",
             )
+        # T2-R1: the runner's legacy parser matches ``##[`` anywhere in a line that
+        # is not a well-formed command, and the gha_* filters keep ``#[]``.
+        if not command_line:
+            raise self.fail(
+                where,
+                f"untrusted variable {_echo(ref.name)} under output.sink github is only allowed "
+                "in a well-formed workflow command line",
+            )
+        if data_segment and last != "gha_data":
+            raise self.fail(where, f"variable {_echo(ref.name)} in command data needs gha_data")
 
     def _emitted_text(
         self,
@@ -1142,16 +1175,28 @@ class _Validator:
         scope: Scope,
         *,
         line_prefix: Optional[str] = None,
-        repeated: bool = False,
+        separator: Optional[str] = None,
         append: bool = False,
     ) -> Interpolation:
         """Parse and check an emitted string (line/loop ``text`` or ``$str``).
 
-        Under ``output.sink: github`` an emitted line that carries a variable must
-        start with literal text that cannot become ``::`` (T2): GitHub trims leading
-        whitespace before matching a workflow command, so a line led by a variable
-        (or by only whitespace or a lone ``:``) could be turned into a live command
-        such as ``::stop-commands::`` by a finding message or path.
+        Under ``output.sink: github`` (threat model T2/T2-R1):
+
+        * an emitted line that carries a variable must start with literal text that
+          cannot become ``::``: GitHub trims leading whitespace before matching a
+          workflow command, so a line led by a variable (or by only whitespace or a
+          lone ``:``) could become a live command such as ``::stop-commands::``;
+        * an untrusted variable may only sit on a well-formed command line: the line
+          opens with a literal ``::<name>`` from the closed allowlist (``error``,
+          ``warning``, ``notice``, ``debug``, ``group``) followed by a literal space or
+          ``::``, and holds a literal second ``::``. Any other line falls through to the
+          runner's legacy parser, which matches ``##[`` anywhere and which the
+          ``gha_*`` filters do not escape. An ``append`` loop cannot prove which line
+          it continues, so it may carry only trusted variables;
+        * every variable before the second ``::`` (and every ``append`` variable) needs
+          ``gha_property``, an untrusted one after it needs ``gha_data``;
+        * no variable may directly follow a literal ending in ``#``, so a value can
+          never complete ``##[``.
 
         :param raw: The raw string.
         :param where: Its JSON path.
@@ -1159,10 +1204,12 @@ class _Validator:
         :param line_prefix: Literal emitted before ``raw`` at the start of an output
             line (``""`` for a ``line`` node, the loop ``prefix`` for an inline loop),
             or ``None`` when ``raw`` never starts a line (``$str``).
-        :param repeated: Whether ``raw`` is an inline loop's per-item text, so its
-            segment within a command line is judged from ``line_prefix`` alone.
+        :param separator: The inline loop ``separator`` when ``raw`` is a per-item text
+            (repeated on one line), else ``None``. Each item's segment is judged by
+            counting ``::`` from ``line_prefix`` through the item's own literals.
         :param append: Whether ``raw`` continues an unknown previous line, so under
-            the ``github`` sink every variable is treated as a property segment.
+            the ``github`` sink every variable is treated as a property segment and
+            must be trusted.
         :returns: The parsed interpolation.
         """
         interpolation = self._interpolation(raw, where)
@@ -1181,15 +1228,55 @@ class _Validator:
         has_variables = any(not isinstance(part, str) for part in parts)
         if github and has_variables and lead in ("", ":"):
             raise self.fail(where, 'under output.sink "github" an emitted line must start with literal text')
+        if github:
+            self._reject_hash_join(parts, where, line_prefix, separator)
+        literal_markers = line_prefix.count("::") + sum(part.count("::") for part in parts if isinstance(part, str))
+        well_formed = (
+            not append and literal_markers >= 2 and _GHA_COMMAND_PATTERN.match(line_prefix + first) is not None
+        )
+        # Counted per item from the prefix: an inline item is judged as if it were
+        # the first on the line; later items only ever land in the data segment.
         markers = line_prefix.count("::")
         for part in parts:
             if isinstance(part, str):
-                if not repeated:
-                    markers += part.count("::")
+                markers += part.count("::")
                 continue
-            property_segment = github if append else command and markers < 2
-            self._check_ref(part, scope, where, property_segment=property_segment)
+            self._check_ref(
+                part,
+                scope,
+                where,
+                property_segment=github if append else command and markers < 2,
+                command_line=not github or well_formed,
+                data_segment=github and well_formed and markers >= 2,
+            )
         return interpolation
+
+    def _reject_hash_join(
+        self, parts: tuple[Union[str, VarRef], ...], where: str, line_prefix: str, separator: Optional[str]
+    ):
+        """Reject a variable directly after a literal ending in ``#`` (T2-R1).
+
+        A value led by ``[`` would otherwise complete the legacy ``##[`` command
+        marker. For an inline loop the join between items (the item's trailing
+        literal plus ``separator``) is checked as well.
+
+        :param parts: The parsed text parts.
+        :param where: Its JSON path.
+        :param line_prefix: Literal emitted before the first part.
+        :param separator: The inline loop separator, or ``None`` when not repeated.
+        """
+        preceding: list[str] = []
+        previous = line_prefix
+        for part in parts:
+            if isinstance(part, str):
+                previous = part
+                continue
+            preceding.append(previous)
+            previous = ""
+        if separator is not None and parts and not isinstance(parts[0], str):
+            preceding.append((parts[-1] if isinstance(parts[-1], str) else "") + separator)
+        if any(text.endswith("#") for text in preceding):
+            raise self.fail(where, 'under output.sink "github" a variable may not follow a literal ending in "#"')
 
     def _variables_used(self, raw: Any, where: str, interpolation: Interpolation) -> frozenset[str]:
         """Check ``variables_used`` equals the referenced set, both directions (rule 4).
@@ -1361,7 +1448,7 @@ class _Validator:
             f"{where}.text",
             inner,
             line_prefix=prefix,
-            repeated=True,
+            separator=separator,
             append=placement == PLACEMENT_APPEND,
         )
         used = self._variables_used(obj["variables_used"], f"{where}.variables_used", text)

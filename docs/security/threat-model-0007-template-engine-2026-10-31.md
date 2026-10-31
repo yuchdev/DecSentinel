@@ -268,3 +268,89 @@ the spec fails closed. The follow-ups are mandatory acceptance criteria, not
 nice-to-haves. Story 02.0 must not merge to `master` until M1-M17 are implemented
 and tested. A later review that finds a missing T1 or T2 mitigation in the code
 escalates to **BLOCK**.
+
+## Re-review of T2 against 5b9704d (2026-10-31)
+
+Probe: `validate_template` on crafted mappings (scratch script, no product edits).
+Runner evidence: `actions/runner` `src/Runner.Common/ActionCommand.cs` (`TryParseV2`
+trims leading whitespace then needs `::`; on failure `ActionCommandManager.TryProcessCommand`
+falls back to legacy `TryParse`, which finds `##[` **anywhere** in the line via
+`IndexOf` and accepts any registered command: `stop-commands`, `add-mask`,
+`set-output`, `save-state`, `error`, `warning`, `debug`, `group`, ...).
+
+Holds: line-start rule for `line` nodes, `group` bodies, block-loop bodies,
+`one-line`/`append` (prefix counted); `""`/`":"`/NBSP/whitespace leads rejected
+(Python `lstrip` is a superset of .NET `TrimStart`); trusted `model` at line start
+rejected and its charset `[A-Za-z0-9._:/@+-]` cannot carry `#`/`[`/CR/LF;
+`separator`/`prefix`/`suffix` cannot hold CR/LF (M7); `": {var}"` is harmless (V2
+needs `::` after trimming).
+
+### [HIGH] T2-R1 Legacy `##[cmd]` parser makes any non-V2 line with an untrusted value live
+- Vector / evidence: `loader.py` `_emitted_text` only guards the line **start**.
+  Accepted under `output.sink: "github"`:
+  - plain lines: `"Finding: {p.message|gha_data}"`;
+  - `append` after a plain line: `"Paths:"` + append `" - {doc.path|gha_property}"`;
+  - command lines with no literal second `::`: `"::warning {p.message|gha_property}"`;
+  - a variable in the command-name slot: `"::{p.message|gha_property}::{p.message|gha_data}"`.
+  V2 rejects each of these lines (no `::` lead, no second `::`, or an unregistered
+  name), so the runner falls back to the legacy parser. `gha_data`/`gha_property`
+  encode `% CR LF` (`: ,`), but not `#`, `[` or `]`. A message, value or path holding
+  `##[stop-commands]tok` (for example a DS101 target `[x](##[stop-commands]tok)`, or a
+  file name) becomes a live command. A literal ending in `#`/`##` can also complete
+  `##[` with the value (CWE-77/CWE-74, CWE-117).
+- Impact: annotations from the rest of the job are suppressed (`stop-commands`),
+  annotations are forged, secrets are masked (`add-mask`), and step outputs or state
+  are poisoned (`set-output`/`save-state`). The exit code is not affected. Applies to
+  custom github templates; the legacy `reporting._render_github` emits only
+  well-formed V2 lines and is not affected.
+- Mitigation (python-expert): under `github`, a line (or `append` continuation) that
+  carries an **untrusted** variable must be a well-formed V2 command:
+  - the leading `::`, then a **literal** command name from a closed allowlist
+    (`error`/`warning`/`notice`/`debug`/`group`), so no variable may sit before the
+    first space or the second `::`;
+  - a **literal** second `::`;
+  - untrusted variables only after `::name ` (with `gha_property`) or after the
+    second `::` (with `gha_data`).
+  Plain and other non-command lines, and `append` loops that cannot prove they
+  continue such a line, may carry only trusted variables whose charset excludes
+  `#[]` and CR/LF. Tests (testing-expert): the four accepted shapes above are
+  rejected, and a `##[` split across a literal and a value is rejected.
+
+### [LOW] T2-R2 `terminal` sink in Actions (accepted risk)
+- `terminal` output does not target Actions. `neutralize` leaves `::` and `##[`
+  alone, so `{doc.path|neutralize}: ...` (accepted) or a `##[...]` message is live
+  when text output runs in a workflow. The legacy `--format text` has the same
+  behaviour, so this is pre-existing. Any tool that prints untrusted text has it too.
+  Accept it, and document in the user docs: use `--format github` or a
+  github-sink template in Actions, or wrap text output in
+  `::stop-commands::<random>`. No loader rule.
+
+### Re-review verdict: BLOCK
+The T2 mitigation is incomplete in code (T2-R1). Per the escalation clause above,
+Story 02.0 stays out of `master` until T2-R1 is fixed and tested.
+
+### Status update (python-expert, 2026-10-31)
+- **T2-R1: mitigated.** `loader.py` `_emitted_text` now applies these rules under the
+  `github` sink:
+  - An untrusted variable is accepted only when the line opens with
+    `_GHA_COMMAND_PATTERN`: ASCII spaces, then `::`, then a literal
+    `error`/`warning`/`notice`/`debug`/`group`, then a literal space or `::`. The line
+    must also hold a literal second `::`.
+  - Plain lines and every `append` loop may carry only trusted variables.
+  - An untrusted variable after the second `::` needs `gha_data`.
+  - `_reject_hash_join` rejects a variable directly after a literal ending in `#`. This
+    covers the loop prefix, and the item text plus separator of an inline loop.
+
+  The line-start rule and `gha_property`-for-every-property-variable rule from 5b9704d
+  are kept. The feature-reviewer one-line fix is also in: `::` markers in per-item text
+  are counted from the prefix count. Tests in `tests/unit/test_telemetry_loader.py`:
+  - `test_github_untrusted_variable_outside_command_line_is_rejected` covers the four
+    vectors above, plus an unlisted name and a name glued to a variable.
+  - `test_github_variable_after_hash_literal_is_rejected` covers the split `##[` case.
+  - `test_github_command_data_needs_gha_data`.
+  - `test_github_standard_command_is_accepted_in_every_placement`.
+  - `test_github_one_line_full_command_text_still_checks_segments`.
+- **T2-R2: accepted risk** (no loader rule). Spec §8 and
+  `docs/user/tutorial/report.md` ("Hostile characters in paths and messages") now
+  recommend `--format github` in Actions, or wrapping text output in
+  `::stop-commands::<random>`.

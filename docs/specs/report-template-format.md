@@ -267,10 +267,30 @@ The rule is checked strictly (threat model T1/T2):
 - The chain must **end** with the sink, so `{p.message|neutralize|upper}` is rejected.
 - With `"sink": "github"` in `output`, only `gha_property`/`gha_data` count as sinks. Any
   variable (trusted or not) before the second `::` of a command line needs
-  `gha_property`, and so does every variable of an `append` loop.
+  `gha_property`, and so does every variable of an `append` loop. An untrusted variable
+  after the second `::` needs `gha_data`.
 - With `"sink": "github"`, every emitted line that holds a variable (including inline
   loops, whose `prefix` counts) must start with literal text that is neither empty nor a
   lone `:` once leading whitespace is trimmed. So `{p.message|gha_data}` cannot start a line.
+- With `"sink": "github"`, an **untrusted** variable may appear only on a well-formed
+  workflow command line. The line must start (after optional spaces) with a literal `::`
+  and a literal command name from the closed list `error`, `warning`, `notice`, `debug`,
+  `group`, followed by a literal space or `::`. It must also contain a literal second `::`.
+  Any other line falls back to the runner's legacy parser, which finds `##[` anywhere in
+  the line, and the `gha_*` filters do not escape `#`, `[` or `]`. Plain lines may carry
+  only trusted variables. So may `append` loops, because the loader cannot prove which
+  line they continue. So `Finding: {p.message|gha_data}`, `::warning {p.message|gha_property}`
+  and `::{p.message|gha_property}::...` are rejected.
+- With `"sink": "github"`, a variable may not directly follow a literal ending in `#`
+  (the loop `prefix`, and the item text plus `separator` of an inline loop, count). So no
+  value can complete a `##[` marker.
+- In an inline loop, each item's segment is judged from the `prefix` plus the item's own
+  literals. So a `one-line` loop whose `text` is the whole
+  `::error file={p.document_path|gha_property},line={p.line|gha_property}::{p.message|gha_data}`
+  command is accepted, and so is one whose `prefix` opens the command.
+- The `terminal` sink does not target GitHub Actions: `neutralize` leaves `::` and `##[`
+  alone. In a workflow, use `--format github` or a `github`-sink template, or wrap text
+  output in `::stop-commands::<random token>`.
 
 ## 9. Extensions (variables, calculations, filters)
 

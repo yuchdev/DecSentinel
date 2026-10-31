@@ -339,6 +339,8 @@ File names and source excerpts come from the repository being scanned, so they a
 
 Neutralised characters: C0 controls (including ESC, CR, LF, TAB), DEL, C1 controls, bidirectional formatting characters, zero-width characters, line and paragraph separators, and lone surrogates (from undecodable file names). Ordinary letters, digits, punctuation and accented or non-Latin text pass through unchanged.
 
+The `text` format is not escaped for GitHub Actions. It leaves `::` and `##[` alone, so a hostile file name or message in text output can act as a workflow command when the scan runs in a workflow. In GitHub Actions, use `--format github`. If you need text output there, wrap it in `::stop-commands::<random token>` and `::<random token>::`. Pick a fresh random token for each run.
+
 This is purely a display concern: [baseline](README.md#managing-baselines-for-legacy-debt) fingerprints are computed from the raw finding fields, never from the escaped output, so escaping never changes whether a finding matches the baseline.
 
 ---

@@ -729,8 +729,8 @@ def test_github_sink_accepts_only_gha_filters():
     [Unit] loader: verifies M5/M6 -- under ``output.sink: github`` neutralize and json are not sinks.
 
     Scenario:
-        Given a github-sink template emitting ``doc.path`` (after a literal lead) through neutralize, json,
-            gha_data and gha_property
+        Given a github-sink template emitting ``doc.path`` on a ``::notice`` command line through neutralize,
+            json, gha_data (data segment) and gha_property (property segment)
         When they are validated
         Then neutralize and json are rejected; gha_data and gha_property are accepted.
 
@@ -743,10 +743,11 @@ def test_github_sink_accepts_only_gha_filters():
         - ``FilterSpec.sinks`` of ``neutralize``/``json``
     """
     for chain in ("neutralize", "json"):
-        line = _line(f"Path: {{doc.path|{chain}}}", ["doc.path"])
+        line = _line(f"::notice::Path: {{doc.path|{chain}}}", ["doc.path"])
         _rejects(_github(_in_loop("documents", "doc", line)), "github sink")
-    for chain in ("gha_data", "gha_property"):
-        validate_template(_github(_in_loop("documents", "doc", _line(f"Path: {{doc.path|{chain}}}", ["doc.path"]))))
+    data = _line("::notice::Path: {doc.path|gha_data}", ["doc.path"])
+    prop = _line("::notice title={doc.path|gha_property}::path", ["doc.path"])
+    validate_template(_github(_in_loop("documents", "doc", data, prop)))
 
 
 _LINE_START = "an emitted line must start with literal text"
@@ -782,8 +783,9 @@ def test_github_line_with_literal_lead_is_accepted():
     [Unit] loader: verifies T2 -- a github-sink line led by safe literal text, or a literal command, is accepted.
 
     Scenario:
-        Given github-sink lines ``Note: {p.message|gha_data}``, ``:x{p.message|gha_data}``, a literal-only line,
-            an empty line and the standard ``::error file=...::...`` form
+        Given github-sink lines ``::notice::Note: {p.message|gha_data}``, a space-indented command, a
+            literal-only line, an empty line, a plain line with a trusted variable and the standard
+            ``::error file=...::...`` form
         When they are validated
         Then all are accepted.
 
@@ -795,9 +797,10 @@ def test_github_line_with_literal_lead_is_accepted():
     On failure, first check:
         - The ``lead`` check in ``_emitted_text``
     """
-    validate_template(_github(_over_problems(_line("Note: {p.message|gha_data}", ["p.message"]))))
-    validate_template(_github(_over_problems(_line(":x{p.message|gha_data}", ["p.message"]))))
+    validate_template(_github(_over_problems(_line("::notice::Note: {p.message|gha_data}", ["p.message"]))))
+    validate_template(_github(_over_problems(_line("  ::warning::{p.message|gha_data}", ["p.message"]))))
     validate_template(_github(_line("::notice::scan finished", []), _line("", [])))
+    validate_template(_github(_line("Profile: {profile}", ["profile"])))
     standard = "::error file={doc.path|gha_property},line={p.line|gha_property}::{p.message|gha_data}"
     validate_template(_github(_over_problems(_line(standard, ["doc.path", "p.line", "p.message"]))))
 
@@ -822,7 +825,7 @@ def test_github_loop_body_line_led_by_variable_is_rejected():
     Scenario:
         Given a nested block-loop body line ``{p.message|gha_data} at {doc.path|gha_data}``
         When it is validated
-        Then it is rejected; the same line with a literal lead is accepted.
+        Then it is rejected; the same text on a well-formed ``::warning::`` command line is accepted.
 
     Boundaries:
         - Focus: threat model T2 (loop body lines)
@@ -834,7 +837,7 @@ def test_github_loop_body_line_led_by_variable_is_rejected():
     """
     used = ["p.message", "doc.path"]
     _rejects(_github(_over_problems(_line("{p.message|gha_data} at {doc.path|gha_data}", used))), _LINE_START)
-    validate_template(_github(_over_problems(_line("- {p.message|gha_data} at {doc.path|gha_data}", used))))
+    validate_template(_github(_over_problems(_line("::warning::{p.message|gha_data} at {doc.path|gha_data}", used))))
 
 
 def test_github_one_line_loop_led_by_variable_is_rejected():
@@ -844,7 +847,7 @@ def test_github_one_line_loop_led_by_variable_is_rejected():
     Scenario:
         Given one-line loops with no prefix, a whitespace prefix, and a lone ``:`` prefix before ``{doc.path}``
         When they are validated
-        Then all are rejected; a ``Docs: `` prefix is accepted.
+        Then all are rejected; a ``::notice::Docs: `` prefix is accepted.
 
     Boundaries:
         - Focus: threat model T2 (one-line placement)
@@ -858,7 +861,7 @@ def test_github_one_line_loop_led_by_variable_is_rejected():
     _rejects(_github(_inline("one-line", text, used)), _LINE_START)
     _rejects(_github(_inline("one-line", text, used, prefix="  ")), _LINE_START)
     _rejects(_github(_inline("one-line", text, used, prefix=":")), _LINE_START)
-    validate_template(_github(_inline("one-line", text, used, prefix="Docs: ", separator=", ")))
+    validate_template(_github(_inline("one-line", text, used, prefix="::notice::Docs: ", separator=", ")))
 
 
 def test_github_one_line_command_items_need_gha_property():
@@ -890,10 +893,10 @@ def test_github_append_continuation_is_checked():
 
     Scenario:
         Given an ``append`` loop after a literal line, emitting ``{doc.path|gha_data}`` with no prefix, then with a
-            ``Docs: `` prefix, then ``{doc.path|gha_property}`` with that prefix
+            ``Docs: `` prefix, then the trusted ``{r|gha_property}`` over ``enabled_rules`` with that prefix
         When they are validated
         Then the unprefixed one is rejected (it may start a line when no line precedes it), the gha_data one is
-            rejected (it may continue a command property), and the last is accepted.
+            rejected (it may continue a command property), and the trusted one is accepted.
 
     Boundaries:
         - Focus: threat model T2 (append continuation)
@@ -907,7 +910,16 @@ def test_github_append_continuation_is_checked():
     _rejects(_github(head, _inline("append", "{doc.path|gha_data}", ["doc.path"])), _LINE_START)
     data = _inline("append", "{doc.path|gha_data}", ["doc.path"], prefix="Docs: ")
     _rejects(_github(head, data), "command property needs gha_property")
-    good = _inline("append", "{doc.path|gha_property}", ["doc.path"], prefix="Docs: ", separator=", ")
+    good = {
+        "type": "loop",
+        "over": "enabled_rules",
+        "as": "r",
+        "placement": "append",
+        "prefix": "Rules: ",
+        "separator": ", ",
+        "text": "{r|gha_property}",
+        "variables_used": ["r"],
+    }
     validate_template(_github(head, good))
 
 
@@ -956,6 +968,167 @@ def test_github_property_segment_needs_gha_property():
     used = ["doc.path", "p.line", "p.message"]
     _rejects(_github(_over_problems(_line(bad, used))), "command property needs gha_property")
     validate_template(_github(_over_problems(_line(good, used))))
+
+
+_NOT_COMMAND = "is only allowed in a well-formed workflow command line"
+_STANDARD_COMMAND = "::error file={p.document_path|gha_property},line={p.line|gha_property}::{p.message|gha_data}"
+_STANDARD_USED = ["p.document_path", "p.line", "p.message"]
+
+
+def _over_findings(placement: str, text: str, used: list[str], **extra: Any) -> dict[str, Any]:
+    """Return an inline loop over the flat ``findings`` list aliased ``p``."""
+    return {
+        "type": "loop",
+        "over": "findings",
+        "as": "p",
+        "placement": placement,
+        "text": text,
+        "variables_used": used,
+        **extra,
+    }
+
+
+def test_github_untrusted_variable_outside_command_line_is_rejected():
+    """
+    [Unit] loader: verifies T2-R1 -- an untrusted variable only on a well-formed workflow command line (regression).
+
+    Scenario:
+        Given github-sink lines that the runner's V2 parser rejects, so its legacy ``##[`` parser scans them: a
+            plain line ``Finding: {p.message|gha_data}``, an ``append`` loop after a plain line and after a
+            command line, ``::warning {p.message|gha_property}`` (no second ``::``), a variable as the command
+            name, an unlisted command name, and a name glued to a variable
+        When they are validated
+        Then every one is rejected, so a value such as ``##[stop-commands]tok`` can never become a command.
+
+    Boundaries:
+        - Focus: threat model T2-R1 (security-auditor re-review of 5b9704d)
+        - Fixtures/params: none
+        - Scope: validate_template
+
+    On failure, first check:
+        - ``well_formed`` in ``_emitted_text`` and the ``command_line`` check in ``_check_ref``
+    """
+    _rejects(_github(_over_problems(_line("Finding: {p.message|gha_data}", ["p.message"]))), _NOT_COMMAND)
+    append = _inline("append", " - {doc.path|gha_property}", ["doc.path"])
+    _rejects(_github(_line("Paths:", []), append), _NOT_COMMAND)
+    _rejects(_github(_line("::notice::Paths:", []), append), _NOT_COMMAND)
+    _rejects(_github(_over_problems(_line("::warning {p.message|gha_property}", ["p.message"]))), _NOT_COMMAND)
+    name_slot = "::{p.message|gha_property}::{p.message|gha_data}"
+    _rejects(_github(_over_problems(_line(name_slot, ["p.message"]))), _NOT_COMMAND)
+    _rejects(_github(_over_problems(_line("::stop-commands::{p.message|gha_data}", ["p.message"]))), _NOT_COMMAND)
+    _rejects(_github(_over_problems(_line("::error{p.message|gha_property}::x", ["p.message"]))), _NOT_COMMAND)
+    _rejects(_github(_over_findings("one-line", "Docs: {p.document_path|gha_data}", ["p.document_path"])), _NOT_COMMAND)
+
+
+def test_github_variable_after_hash_literal_is_rejected():
+    """
+    [Unit] loader: verifies T2-R1 -- a variable may not directly follow a literal ending in ``#`` (split ``##[``).
+
+    Scenario:
+        Given github-sink texts where ``#``/``##`` ends the literal before a variable: in a command line, in a
+            plain line with a trusted variable, in a one-line loop prefix, in its separator, and at the end of
+            its item text joined by an empty separator
+        When they are validated
+        Then all are rejected; ``# `` followed by a space before the variable is accepted.
+
+    Boundaries:
+        - Focus: threat model T2-R1 (``##[`` completed by a ``[``-leading value)
+        - Fixtures/params: none
+        - Scope: validate_template
+
+    On failure, first check:
+        - ``_reject_hash_join``
+    """
+    hash_join = 'may not follow a literal ending in "#"'
+    _rejects(_github(_over_problems(_line("::notice::##{p.message|gha_data}", ["p.message"]))), hash_join)
+    _rejects(_github(_over_problems(_line("Line #{p.line}", ["p.line"]))), hash_join)
+    data = "{p.document_path|gha_data}"
+    _rejects(_github(_over_findings("one-line", data, ["p.document_path"], prefix="::notice::##")), hash_join)
+    looped = _over_findings("one-line", data, ["p.document_path"], prefix="::notice::", separator="#")
+    _rejects(_github(looped), hash_join)
+    tail = _over_findings("one-line", data + "#", ["p.document_path"], prefix="::notice::")
+    _rejects(_github(tail), hash_join)
+    validate_template(_github(_over_problems(_line("::notice::# {p.message|gha_data}", ["p.message"]))))
+
+
+def test_github_command_data_needs_gha_data():
+    """
+    [Unit] loader: verifies T2-R1 -- an untrusted variable after the second ``::`` must end with ``gha_data``.
+
+    Scenario:
+        Given ``::notice::{p.message|gha_property}`` and the trusted ``::notice::line {p.line}``
+        When they are validated
+        Then the untrusted one is rejected and the trusted one is accepted unfiltered.
+
+    Boundaries:
+        - Focus: threat model T2-R1 (data segment filter)
+        - Fixtures/params: none
+        - Scope: validate_template
+
+    On failure, first check:
+        - The ``data_segment`` check in ``_check_ref``
+    """
+    _rejects(_github(_over_problems(_line("::notice::{p.message|gha_property}", ["p.message"]))), "needs gha_data")
+    validate_template(_github(_over_problems(_line("::notice::line {p.line}", ["p.line"]))))
+
+
+def test_github_standard_command_is_accepted_in_every_placement():
+    """
+    [Unit] loader: verifies T2-R1 and the one-line fix -- the standard ``::error file=...::...`` form loads everywhere.
+
+    Scenario:
+        Given the standard command as a line node in nested loops, as a block-loop body over ``findings``, as the
+            full item text of a one-line loop (regression: its ``::`` markers were not counted), split between a
+            one-line prefix and its text, and with the whole header in the prefix
+        When they are validated
+        Then all are accepted, so the future packaged ``github.json`` is expressible.
+
+    Boundaries:
+        - Focus: threat model T2-R1 (no over-rejection), feature-reviewer one-line ``::`` count
+        - Fixtures/params: none
+        - Scope: validate_template
+
+    On failure, first check:
+        - The per-item ``markers`` count in ``_emitted_text``
+    """
+    nested = "::error file={doc.path|gha_property},line={p.line|gha_property}::{p.message|gha_data}"
+    validate_template(_github(_over_problems(_line(nested, ["doc.path", "p.line", "p.message"]))))
+    validate_template(_github(_in_loop("findings", "p", _line(_STANDARD_COMMAND, _STANDARD_USED))))
+    validate_template(_github(_over_findings("one-line", _STANDARD_COMMAND, _STANDARD_USED, separator=" ")))
+    split = _STANDARD_COMMAND[len("::error file=") :]
+    validate_template(_github(_over_findings("one-line", split, _STANDARD_USED, prefix="::error file=")))
+    header = _over_findings(
+        "one-line",
+        "{p.document_path|gha_data}: {p.message|gha_data}",
+        ["p.document_path", "p.message"],
+        prefix="::error title=DocSentinel::",
+        separator="; ",
+    )
+    validate_template(_github(header))
+
+
+def test_github_one_line_full_command_text_still_checks_segments():
+    """
+    [Unit] loader: verifies the per-item ``::`` count still holds each segment to its filter.
+
+    Scenario:
+        Given a one-line loop whose item text is the full command but with ``gha_data`` in the property segment,
+            and one with ``gha_property`` in the data segment
+        When they are validated
+        Then the first needs gha_property and the second needs gha_data.
+
+    Boundaries:
+        - Focus: feature-reviewer one-line ``::`` count (no under-checking after the fix)
+        - Fixtures/params: none
+        - Scope: validate_template
+
+    On failure, first check:
+        - The per-item ``markers`` count in ``_emitted_text``
+    """
+    bad_property = _STANDARD_COMMAND.replace("{p.document_path|gha_property}", "{p.document_path|gha_data}")
+    _rejects(_github(_over_findings("one-line", bad_property, _STANDARD_USED)), "needs gha_property")
+    bad_data = _STANDARD_COMMAND.replace("{p.message|gha_data}", "{p.message|gha_property}")
+    _rejects(_github(_over_findings("one-line", bad_data, _STANDARD_USED)), "needs gha_data")
 
 
 def test_workflow_command_line_requires_github_sink():
