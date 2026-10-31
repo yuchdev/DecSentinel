@@ -1,0 +1,12 @@
+{
+  "template_version": 1,
+  "name": "mini",
+  "type": "text",
+  "description": "Minimal repository template: one line per finding.",
+  "lines": [
+    { "type": "line", "text": "Profile: {profile}", "variables_used": ["profile"] },
+    { "type": "loop", "over": "findings", "as": "p", "placement": "block", "body": [
+      { "type": "line", "text": "{p.document_path|neutralize}:{p.line}: {p.message|neutralize}",
+        "variables_used": ["p.document_path", "p.line", "p.message"] } ] }
+  ]
+}

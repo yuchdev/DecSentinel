@@ -1,0 +1,8 @@
+{
+  "template_version": 1,
+  "name": "dup-key",
+  "type": "text",
+  "lines": [
+    { "type": "line", "text": "Profile: {profile}", "text": "Profile: {profile|upper}", "variables_used": ["profile"] }
+  ]
+}

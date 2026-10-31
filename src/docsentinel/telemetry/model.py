@@ -11,6 +11,7 @@ The model is deterministic for a given ``(ScanResult, config)``: per-run values
 (``run.generated_at``, ``run.id``) appear only when explicitly requested.
 """
 
+import re
 import uuid
 from collections import Counter
 from collections.abc import Mapping, Sequence
@@ -33,6 +34,12 @@ REPORT_SCHEMA_VERSION: Final[int] = 2
 #: Trust tags (spec §8): an untrusted variable must pass a sink filter in a text template.
 TRUSTED: Final[str] = "trusted"
 UNTRUSTED: Final[str] = "untrusted"
+
+#: Bound on the invoker-supplied ``model`` id (threat model T8/M15). ``model`` is
+#: tagged trusted, so it may reach the text and GitHub sinks unfiltered; this
+#: ASCII-only charset and 128-character length cap is what makes that tag safe
+#: (no control, bidi, whitespace, ``%``, ``,`` or newline can ever be carried).
+MODEL_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,127}")
 
 JsonValue = Any
 
@@ -218,9 +225,15 @@ class ReportModel:
         :param report_schema_version: The schema declared by the rendering template.
         :returns: The context tree (``dict``/``list``/``str``/``int``/``bool``/``None`` only).
         :raises NotImplementedError: If ``extensions`` is non-empty.
+        :raises ValueError: If ``model`` does not match :data:`MODEL_ID_PATTERN`; the
+            rejected value is never echoed, as it is untrusted invoker input.
         """
         if extensions:
             raise NotImplementedError("report extensions are not supported yet (Milestone 0007 Story 04.0)")
+        if model is not None and (not isinstance(model, str) or MODEL_ID_PATTERN.fullmatch(model) is None):
+            raise ValueError(
+                "report model id must be 1-128 ASCII characters from [A-Za-z0-9._:/@+-], starting with a letter or digit"
+            )
 
         documents: dict[str, dict[str, JsonValue]] = {}
         for document in result.documents:

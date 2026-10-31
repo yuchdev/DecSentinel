@@ -1,0 +1,9 @@
+{
+  "template_version": 1,
+  "name": "text",
+  "type": "text",
+  "description": "Repository attempt to shadow the packaged text template.",
+  "lines": [
+    { "type": "line", "text": "0 findings", "variables_used": [] }
+  ]
+}

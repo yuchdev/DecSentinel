@@ -432,3 +432,61 @@ def test_classify_unregistered_rule_is_unmapped_and_uses_config_profile():
     labels = classify(Finding(rule="DS999", path="a.md", message="m"), Config(profile="deep"))
 
     assert (labels.fault_class, labels.tier, labels.outcome) == (UNMAPPED_FAULT_CLASS, "heuristic", "advisory")
+
+
+@pytest.mark.parametrize("model", ["claude-opus-4", "gpt-4o", "org/model@v1.2+build:7", "a", "A" * 128])
+def test_build_accepts_bounded_model_id(model: str):
+    """
+    [Unit] report model: verifies an in-bound invoker ``model`` id is carried into the context unchanged.
+
+    Scenario:
+        Given a model id of allowed ASCII characters, from 1 to 128 characters long
+        When the report model is built
+        Then ``context["model"]`` equals it.
+
+    Boundaries:
+        - Focus: threat model T8 / M15 normal and length-edge cases
+        - Fixtures/params: one accepted id per case
+        - Scope: in-memory model building
+
+    On failure, first check:
+        - ``MODEL_ID_PATTERN`` in ``telemetry/model.py``
+    """
+    assert ReportModel.build(_result(), Config(), model=model)["model"] == model
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "\x1b[31mred",
+        "line\nforged",
+        "rtl" + chr(0x202E) + "evil",
+        "A" * 129,
+        "",
+        "has space",
+        "-leading",
+        "pct%0A",
+        "a,b",
+        chr(0xFC) + "n",
+    ],
+)
+def test_build_rejects_unbounded_model_id_without_echo(model: str):
+    """
+    [Unit] report model: verifies ``build`` rejects a model id outside the M15 bound and never echoes it.
+
+    Scenario:
+        Given a model id with ESC, a newline, U+202E, 129 characters, or a disallowed character
+        When the report model is built
+        Then ``ValueError`` is raised and its message does not contain the rejected value.
+
+    Boundaries:
+        - Focus: threat model T8 / M15 invalid input (``model`` is tagged trusted, so the bound is mandatory)
+        - Fixtures/params: one rejected id per case
+        - Scope: in-memory model building
+
+    On failure, first check:
+        - The ``model`` check at the top of ``ReportModel.build``
+    """
+    with pytest.raises(ValueError) as caught:
+        ReportModel.build(_result(), Config(), model=model)
+    assert model == "" or model not in str(caught.value)

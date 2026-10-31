@@ -1,0 +1,8 @@
+{
+  "template_version": 1,
+  "name": "typo-key",
+  "type": "text",
+  "lines": [
+    { "type": "line", "text": "Profile: {profile}", "varibles_used": ["profile"] }
+  ]
+}
