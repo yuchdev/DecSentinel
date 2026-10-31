@@ -8,7 +8,7 @@
 | Story | Name | State | Tests executed |
 |---|---|---|---|
 | 01.0 | Telemetry package and report model | ✅ Complete (2/2 tasks) | Full suite 2679 passed, 9 skipped; self-scan exit 0; `uv build` ok; feature-reviewer LGTM; task-verifier PARTIAL (no blocking gaps, see notes) |
-| 02.0 | Template engine | 🔶 In progress (1/2 tasks) | Task 01 loader: 2907 passed + 261 targeted after two security fix rounds; security-auditor PASS (T2-R1 mitigated), feature-reviewer LGTM, task-verifier PASS |
+| 02.0 | Template engine | ✅ Complete (2/2 tasks) | Full suite 3055 passed, 9 skipped, 1 load-induced timing flake (`test_root_times_n_workload_fails`, passes alone); self-scan 0; `uv build` ok; task-verifier PASS, feature-reviewer LGTM, security-auditor PASS_WITH_FOLLOWUP |
 | 03.0 | Standard templates and cutover | ⬜ Not started | — |
 | 04.0 | Extensions | ⬜ Not started | — |
 | 05.0 | Tests, docs, acceptance | ⬜ Not started | — |
@@ -47,3 +47,17 @@
 **Reconciliation:** both task specs consumed as written; extra shared module `classify.py` and extra `build()` keyword arguments (`strict`, `model`, `report_include_run_meta`, `report_schema_version`) are supersets, not departures.
 - 2026-10-31: Story 02.0 Task 01 (loader) done: `fb5e11a`, `5b9704d`, `fcb9c42`, threat model `docs/security/threat-model-0007-template-engine-2026-10-31.md`. Review found the github-sink injection (variable-first line; then legacy `##[` fallback); fixed with the rule that untrusted variables appear only in well-formed `::error|warning|notice|debug|group` command lines (spec section 8). Follow-ups: (a) Story 04.0 must tag `ext.*` and `telemetry_domains` values untrusted; (b) Task 02 must test `gha_data` escaping of `%`/CR/LF, the render-purity patch test (M13/M14) and a severity-routing github template (conditions with literal command names); (c) `terminal` sink is an accepted risk (T2-R2): user docs recommend `--format github` in Actions (added to `docs/user/tutorial/report.md`); (d) `tests/mock/test_standard_loader.py::test_ensure_standard_loaded_is_idempotent_on_success` fails when run alone at the Story 01.0 base too (order-dependent, pre-existing) and two wall-clock tests in `tests/unit/test_timing_helpers.py` failed once each under load; (e) `_emitted_text` in `loader.py` is long, extract the `well_formed` computation when touched again; (f) the loader reads `neutralize_text` from `reporting.py`, repoint to `filters.neutralize` in Task 02.
 - 2026-10-31: **D7 ruled by the owner: the DocSentinel domain is `"docs"`** (matches the accepted fault-event contract and FlakeForge). `classify.DEFAULT_DOMAIN`, plan, Story 04.0 specs, template-format spec, ADR 0003 and CLAUDE.md updated; the per-path example now maps `docs/**` and `adr/**` to `docs`, `.claude/agents/**` to `agent`.
+
+### Story 02.0 - Template engine (✅ 2026-10-31)
+
+**Delivered**
+- `telemetry/loader.py`: strict template loader/validator (file gate with `O_NOFOLLOW|O_NONBLOCK`, 256 KiB, duplicate-key/NaN rejection, closed schema, trust rule, github-sink well-formed-command rule); `ReportModel.build` bounds invoker-supplied `model`.
+- `telemetry/engine.py` + `telemetry/filters.py`: logic-less text/JSON renderer, nine filters, `neutralize`/`gha_property`/`gha_data` byte-identical to the pre-move tables (checked on every code point), single-pass substitution, step/work/output budgets, streaming JSON encoder (`ensure_ascii` forced).
+- `docs/security/threat-model-0007-template-engine-2026-10-31.md` with findings T1-T11, R1-R9 and verdicts; spec section 8 (sink/trust rules) updated.
+- D7 ruled by the owner: domain `docs`.
+
+**Tests / gate:** 2679 -> 3055 passed (9 skipped); self-scan 0; `uv build` ok. Security review took five rounds: github-sink injection (variable-first line, then legacy `##[` fallback), DAG/cycle context, late output cap, quadratic append, work that emits nothing (`MAX_STEPS` = 2,000,000), indented-JSON amplification (streaming encoder).
+
+**Reconciliation:** both task specs consumed; supersets: `filters.py` (TemplateError lives here to avoid a cycle, re-exported from the loader), the step/work budgets and the streaming encoder, the closed github command-name list. `reporting.py` keeps the original escape functions (verbatim copies, parity-tested) until Story 03.0 deletes them.
+
+**Follow-ups for later stories:** (a) Story 03.0: delete the duplicated originals in `reporting.py`; R4 invisible characters outside the neutralize table (soft hyphen, U+2060-2064, tag characters, Hangul fillers) change legacy output and parity tests together; the shipped `github.json` must obey the well-formed-command rule (literal command per severity branch, `gha_property` before the second `::`, `gha_data` after); the step cap (not `MAX_ITERATIONS`) is now the effective size limit, re-measure on the 358-document corpus (about 120k steps for 5000 findings); (b) R8 (LOW): encode very long context strings in slices; (c) Story 04.0: tag `ext.*` and `telemetry_domains` values untrusted; (d) Story 05.0: severity-routing and cap tests exist, add the CanonixEngine-scale performance run.
