@@ -22,6 +22,7 @@ Every consumer (CLI, Python library, pytest plugin) goes through the same engine
 | `discovery`      | Inventories Markdown files in a stable order.                                                     |
 | `engine.scan`    | Orchestrates the registered analyzers and applies baseline filters.                               |
 | `reporting`      | Presents the shared `ScanResult` contract for the CLI and Python clients.                         |
+| `telemetry`      | Fault events, finding classification (`classify`) and the report context (`ReportModel`).         |
 | pytest plugin    | Opt-in; calls the same engine.                                                                    |
 
 `engine.scan` forwards the effective `Config` to any analyzer that declares a third `config`
@@ -374,8 +375,10 @@ Opt-in status is reported, never hidden:
 - **`ScanResult.notice`** counts only genuinely evaluated rules and names any active opt-in rule
   whose policy is off, for example:
   `12 fast rule(s) evaluated; opt-in rule(s) not enabled: DS110 (set require_fence_languages), DS112 (set navigation_indexes), DS115 (set deprecated_references_file), DS118 (set documentation_naming).`
-  The `ScanResult` dataclass shape, JSON schema v1, exit codes and `enabled_rules` semantics are
-  unchanged: selection stays orthogonal to whether an opt-in policy fires.
+  The notice is built from two structured `ScanResult` fields, `rules_evaluated` (int) and
+  `opt_in_off` (`(code, option)` pairs), so templates can loop over the off rules. JSON schema v1,
+  exit codes and `enabled_rules` semantics are unchanged: selection stays orthogonal to whether an
+  opt-in policy fires.
 - **`docsentinel rules`** marks such a rule, for example:
   - `DS110: Missing language labels on code fences [opt-in: set require_fence_languages]`
   - `DS112: Declared documentation navigation integrity [opt-in: set navigation_indexes]`
@@ -482,3 +485,18 @@ contract shape for JSON and text consumers.
 changed (not merely added) in `ScanResult`'s JSON representation. Adding a new optional field with a
 sensible default does **not** require a bump; only breaking changes do. This mirrors
 semantic versioning for data, not for code.
+
+Milestone 0007 adds defaulted fields that the schema-1 JSON report deliberately omits, so its output
+stays byte-identical:
+
+- `Finding.column`, `Finding.value` and `Finding.type` are optional report attributes. They are
+  excluded from equality, hashing and baseline fingerprints. `value` holds only the token the
+  message already echoes, such as a link target, never a surrounding snippet. `DS101`, `DS102` and
+  `DS103` set them; other rules leave them `None`.
+- `ScanResult.rules_evaluated` and `ScanResult.opt_in_off` hold the structured form of `notice`.
+
+`telemetry.model.ReportModel.build(result, config)` turns a `ScanResult` into the JSON-shaped
+context that report templates render from. `telemetry.model.CONTEXT_SCHEMA` declares each variable
+with its type and trust tag. Problems carry `fault_class`, `tier` and `outcome` from
+`telemetry.classify.classify`, the same function the fault-event adapter uses. See the
+[report template format](/docs/specs/report-template-format.md).
