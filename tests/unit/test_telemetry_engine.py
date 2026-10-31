@@ -7,9 +7,14 @@ docstrings. Non-printable code points are spelled with ``chr()``.
 """
 
 import ast
+import contextlib
 import copy
 import json
+import signal
 import sys
+import time
+import tracemalloc
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -910,6 +915,310 @@ def test_json_embed_counts_against_output_cap(monkeypatch: pytest.MonkeyPatch):
 
     with pytest.raises(TemplateError, match="output larger than 500"):
         render_template(template, _context())
+
+
+# --------------------------------------------------------------------------- M13 regressions (R1-R3)
+
+
+@contextlib.contextmanager
+def _deadline(seconds: float) -> Iterator[None]:
+    """Fail the test if the block runs longer than ``seconds``.
+
+    A ``SIGALRM`` timer interrupts a hang where the platform has one; the elapsed
+    time is asserted afterwards on every platform.
+    """
+
+    def _expired(signum: int, frame: Any):
+        """Raise when the timer fires."""
+        raise AssertionError(f"render did not finish within {seconds} s")
+
+    use_alarm = hasattr(signal, "SIGALRM") and hasattr(signal, "setitimer")
+    previous = signal.signal(signal.SIGALRM, _expired) if use_alarm else None
+    if use_alarm:
+        signal.setitimer(signal.ITIMER_REAL, seconds * 2)
+    started = time.perf_counter()
+    try:
+        yield
+    finally:
+        if use_alarm:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            signal.signal(signal.SIGALRM, previous)
+    assert time.perf_counter() - started < seconds
+
+
+def _doubling_chain(depth: int) -> list[Any]:
+    """Return a list DAG whose every level holds the level below twice (2**depth leaves)."""
+    node: list[Any] = ["leaf"]
+    for _ in range(depth):
+        node = [node, node]
+    return node
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        pytest.param(_json({"$var": "pending"}), id="json-var"),
+        pytest.param(_text(_line("{pending|json}", ["pending"])), id="text-json-filter"),
+    ],
+)
+def test_doubling_dag_context_stops_at_the_cap_quickly(template: Template):
+    """
+    [Unit] engine: verifies a 40-level shared-subtree DAG is refused by the output cap in linear time (R3).
+
+    Scenario:
+        Given ``pending`` set to a 40-level doubling chain (each level references the one below twice)
+        When it is embedded by ``$var`` or rendered through ``|json`` with the real default cap
+        Then ``TemplateError`` about the output cap is raised within 2 s, before any serialization.
+
+    Boundaries:
+        - Focus: regression: ``_size`` walked shared nodes once per reference (exponential hang)
+        - Fixtures/params: json ``$var`` and text ``json`` filter
+        - Scope: render_template, ``engine._size`` memoization and early stop
+
+    On failure, first check:
+        - The ``memo`` and ``cap`` early return in ``engine._size``; ``_Renderer._estimate``
+    """
+    context = _context(pending=_doubling_chain(40))
+
+    with _deadline(2.0), pytest.raises(TemplateError, match="output larger than"):
+        render_template(template, context)
+
+
+def test_small_dag_still_renders_with_exact_output():
+    """
+    [Unit] engine: verifies a small shared-subtree DAG is accepted and rendered in full.
+
+    Scenario:
+        Given ``pending`` set to a 3-level doubling chain
+        When rendered through ``|json`` and ``$var``
+        Then both outputs equal ``json.dumps`` of the expanded tree.
+
+    Boundaries:
+        - Focus: normal case: memoized sizes must not reject a legitimate DAG
+        - Fixtures/params: inline context
+        - Scope: render_template, ``engine._check_context`` and ``engine._size``
+
+    On failure, first check:
+        - The ``done`` set in ``engine._check_context``
+    """
+    chain = _doubling_chain(3)
+    expected = json.dumps(chain)
+
+    assert render_template(_text(_line("{pending|json}", ["pending"])), _context(pending=chain)) == expected
+    assert json.loads(render_template(_json({"$var": "pending"}), _context(pending=chain))) == chain
+
+
+def _self_list() -> dict[str, Any]:
+    """Return a context whose ``pending`` list contains itself."""
+    loop: list[Any] = ["a"]
+    loop.append(loop)
+    return _context(pending=loop)
+
+
+def _self_dict() -> dict[str, Any]:
+    """Return a context whose ``model`` dict reaches itself through a nested list."""
+    model: dict[str, Any] = {"name": "m", "children": []}
+    model["children"].append({"parent": model})
+    return _context(model=model)
+
+
+def _self_root() -> dict[str, Any]:
+    """Return a context that contains itself."""
+    context = _context()
+    context["advisory"] = context
+    return context
+
+
+@pytest.mark.parametrize("build", [_self_list, _self_dict, _self_root], ids=["list", "nested-dict", "root"])
+def test_cyclic_context_is_rejected_quickly(build: Any):
+    """
+    [Unit] engine: verifies a context holding a reference cycle raises TemplateError instead of looping.
+
+    Scenario:
+        Given a context whose list, nested dict or root reaches itself
+        When a json template embedding the whole tree via ``$var`` and a text line are rendered
+        Then each raises ``TemplateError`` about a cycle within 2 s.
+
+    Boundaries:
+        - Focus: regression: cycles passed the ``seen`` de-duplication and ``_size`` looped forever
+        - Fixtures/params: three cycle shapes
+        - Scope: render_template, ``engine._check_context``
+
+    On failure, first check:
+        - The ``on_path`` set in ``engine._check_context``
+    """
+    for template in (_json({"$var": "pending"}), _text(_line("x", []))):
+        with _deadline(2.0), pytest.raises(TemplateError, match="cycle"):
+            render_template(template, build())
+
+
+def test_repeated_json_filter_line_stops_early_with_bounded_memory(monkeypatch: pytest.MonkeyPatch):
+    """
+    [Unit] engine: verifies one line repeating {documents|json} stops at the cap before the line is built (R1).
+
+    Scenario:
+        Given ``MAX_OUTPUT_CHARS`` lowered to 1 MB, ``documents`` serializing to about 200 KB,
+        and one line holding ``{documents|json}`` 200 times (about 40 MB if built in full)
+        When rendered under ``tracemalloc``
+        Then ``TemplateError`` is raised and the traced peak stays under 6 MB.
+
+    Boundaries:
+        - Focus: regression: the cap was charged only after a whole line was joined
+        - Fixtures/params: lowered cap, synthetic 200 KB corpus
+        - Scope: render_template, per-piece ``charge`` in ``_Renderer._interpolate``
+
+    On failure, first check:
+        - ``_Renderer._interpolate`` charging and ``_Budget.reserve`` in ``_Renderer._value``
+    """
+    monkeypatch.setattr(engine, "MAX_OUTPUT_CHARS", 1_000_000)
+    documents = [{"path": f"docs/{index:05d}.md", "message": "m" * 180} for index in range(1000)]
+    context = _context(documents=documents)
+    assert 150_000 < len(json.dumps(documents)) < 300_000
+    template = _text(_line("{documents|json}" * 200, ["documents"]))
+
+    tracemalloc.start()
+    try:
+        with _deadline(5.0), pytest.raises(TemplateError, match="output larger than 1000000"):
+            render_template(template, context)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert peak < 6_000_000
+
+
+@pytest.mark.parametrize(
+    ("text", "used", "filter_name"),
+    [
+        pytest.param("{documents|json}", ["documents"], "json", id="json"),
+        pytest.param("{enabled_rules|join(', ')}", ["enabled_rules"], "join", id="join"),
+    ],
+)
+def test_materializing_filter_is_refused_before_it_runs(
+    monkeypatch: pytest.MonkeyPatch, text: str, used: list[str], filter_name: str
+):
+    """
+    [Unit] engine: verifies json/join are refused before materializing a result past the remaining budget (R1).
+
+    Scenario:
+        Given ``MAX_OUTPUT_CHARS`` lowered to 100 and a context whose filter result would be far larger
+        When ``{documents|json}`` or ``{enabled_rules|join(', ')}`` renders
+        Then ``TemplateError`` about the cap is raised and the filter function is never called.
+
+    Boundaries:
+        - Focus: edge case: the size estimate runs before the expensive call
+        - Fixtures/params: both materializing filters; spy on ``engine.apply_filter``
+        - Scope: render_template, ``_Renderer._estimate``
+
+    On failure, first check:
+        - The ``reserve`` call before ``apply_filter`` in ``_Renderer._value``
+    """
+    calls: list[str] = []
+    real = engine.apply_filter
+
+    def spy(name: str, value: Any, args: tuple[str, ...] = ()) -> Any:
+        """Record the filter name, then apply the real filter."""
+        calls.append(name)
+        return real(name, value, args)
+
+    monkeypatch.setattr(engine, "MAX_OUTPUT_CHARS", 100)
+    monkeypatch.setattr(engine, "apply_filter", spy)
+    context = _context(
+        documents=[{"path": f"docs/{index}.md"} for index in range(50)],
+        enabled_rules=[f"DS{index:03d}" for index in range(50)],
+    )
+
+    with pytest.raises(TemplateError, match="output larger than 100"):
+        render_template(_text(_line(text, used)), context)
+    assert filter_name not in calls
+
+
+def test_many_appends_render_in_linear_time():
+    """
+    [Unit] engine: verifies 32000 append loops extending one line finish well under 2 s (R2).
+
+    Scenario:
+        Given a block loop over 32000 items whose body is an ``append`` loop with a 200-char prefix
+        When rendered with the real caps (output about 6.5 MB)
+        Then it finishes within 2 s and the single line holds every segment.
+
+    Boundaries:
+        - Focus: regression: ``lines[-1] += segment`` re-copied the line per append (115 s at 32k)
+        - Fixtures/params: synthetic 32000-item list
+        - Scope: render_template, ``engine._Lines``
+
+    On failure, first check:
+        - ``_Lines.extend`` and the append branch of ``_Renderer._loop``
+    """
+    count = 32_000
+    prefix = "x" * 200
+    template = _text(
+        _line("start", []),
+        _block("pending", "item", _inline("enabled_rules", "r", "{r}", ["r"], "append", prefix=prefix)),
+    )
+    context = _context(pending=["p"] * count, enabled_rules=["r"])
+
+    with _deadline(2.0):
+        rendered = render_template(template, context)
+
+    assert "\n" not in rendered
+    assert len(rendered) == len("start") + count * (len(prefix) + 1)
+
+
+def test_append_then_line_keeps_segment_order():
+    """
+    [Unit] engine: verifies an append extends the open line and a following line starts a new one.
+
+    Scenario:
+        Given a line, an append loop over two rule codes, then another line
+        When rendered
+        Then the appended segment lands on the first line only, in order.
+
+    Boundaries:
+        - Focus: edge case of the segment buffer closing the open line
+        - Fixtures/params: inline context
+        - Scope: render_template, ``engine._Lines``
+
+    On failure, first check:
+        - ``_Lines.start`` joining the open segments
+    """
+    template = _text(
+        _line("A", []),
+        _inline("enabled_rules", "r", "{r}", ["r"], "append", prefix=" [", suffix="]", separator=","),
+        _line("B", []),
+    )
+
+    assert render_template(template, _context(enabled_rules=["DS1", "DS2"])) == "A [DS1,DS2]\nB"
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        pytest.param(_text(_line("{documents_count}", ["documents_count"])), id="text-plain"),
+        pytest.param(_text(_line("{documents_count|neutralize}", ["documents_count"])), id="text-filter"),
+        pytest.param(_json({"n": {"$var": "documents_count"}}), id="json-var"),
+        pytest.param(_json({"$str": "{documents_count}"}), id="json-str"),
+    ],
+)
+def test_int_too_long_to_print_raises_template_error(template: Template):
+    """
+    [Unit] engine: verifies an int over the 4300-digit conversion limit gives TemplateError, not ValueError (R3).
+
+    Scenario:
+        Given ``documents_count`` set to ``10 ** 5000``
+        When rendered as text (plain and filtered) and as json (``$var`` and ``$str``)
+        Then ``TemplateError`` is raised in every case.
+
+    Boundaries:
+        - Focus: invalid input: library-supplied context must stay inside the error contract
+        - Fixtures/params: four rendering paths
+        - Scope: render_template, ``filters.to_text``
+
+    On failure, first check:
+        - The ``ValueError`` catch in ``filters.to_text`` and in ``render_template``
+    """
+    with pytest.raises(TemplateError):
+        render_template(template, _context(documents_count=10**5000))
 
 
 # --------------------------------------------------------------------------- determinism and sweep

@@ -378,3 +378,79 @@ About 50 probes went through `validate_template`. No data-driven command or `##[
   (a failure falls back to legacy). gha_property escaping keeps properties parseable.
 
 ### Re-attack verdict: PASS (T2-R1 closed; follow-up above tracked for the extensions task)
+
+## Story-close review of the renderer (security-auditor, 2026-10-31, at 60f520b)
+Scope: `telemetry/engine.py` and `telemetry/filters.py`. Probes were scratch scripts run through
+`validate_template` and `render_template`; no product code was edited.
+
+Holds:
+- M14: a value holding `{run.id}{{ {doc.path} $var %s` renders literally in text and in `$str`.
+  Context data with `$var`/`$for` keys is embedded as data.
+- JSON: a hostile path such as `"}, "forged": true, ...` plus a lone surrogate, NUL or U+2028
+  round-trips as a single string value. Output is pure ASCII and keys come only from the template.
+- M8: `ensure_ascii` is forced in the engine, and the loader also rejects `false`.
+- Text backstop: a trusted value carrying ESC is refused.
+- `neutralize`, `gha_property` and `gha_data` give the same output as the pre-move
+  `reporting.py` (`60f520b~1`) on all 0x110000 code points, and the tables are equal.
+- §7 escaping: `gha_property` encodes `% CR LF : ,` and `gha_data` encodes `% CR LF`. `#[]`
+  are left as they are, which is covered by T2-R1. No Cc/Cs code point is left after `gha_data`.
+- Error messages echo only template names and kind words. `TemplateError` is neutralized and
+  capped at 512 characters.
+- Purity: there are no I/O, environment or clock imports, and the purity mock test passes.
+
+### [MEDIUM] R1 Output cap is charged only after a whole line or `$str` is built (CWE-400, CWE-770)
+- Evidence: `engine.py:315-332` `_interpolate` joins every piece before `_emit` (`:441`) or
+  `JsonStr` (`:534-535`) charges the budget. The `json`/`join` filter output is not capped.
+- Probe: one 3.2 KB line `{documents|json}` x200 over a 1.1 MB corpus reached a 435 MB peak and
+  took 22 s before the cap fired. With the cap lowered to 1 MB the peak was the same. A
+  256 KiB template (about 16k repeats) scales this to tens of GB, so the process is killed by
+  OOM instead of exiting 2.
+- Mitigation (python-expert): charge each substituted piece as it is appended in
+  `_interpolate`, and do not count it again in `_emit`/`JsonStr`.
+- Test (testing-expert): a line that repeats `{documents|json}` raises as soon as the
+  cumulative length passes the cap. Assert this with a monkeypatched cap and a peak-memory bound.
+
+### [MEDIUM] R2 Quadratic `append` stays under both caps (CWE-407)
+- Evidence: `engine.py:474-475` `lines[-1] += segment` copies the whole line for every append.
+  CPython's in-place concat does not apply to a list item.
+- Probe: a block loop of n items, each running an `append` with a 200-char prefix, took
+  0.37 s at n=2000, 4.6 s at n=8000 and 115 s at n=32000. Output was only 6.5 MB, far under both
+  caps. A nested `documents` x `findings` loop on the ADR 0003 corpus is about 67k appends, so
+  the CI job hangs.
+- Mitigation: buffer the open last line as a list of segments and join it once when the next
+  line starts or rendering ends.
+- Test: n=100k appends render in linear time (time bound or op-count).
+
+### [LOW] R3 Library-supplied context escapes the error contract
+- Evidence:
+  - An int with more than 4300 digits makes `to_text`/`_scalar_text` (`filters.py:245,258`)
+    raise a bare `ValueError`, not `TemplateError`.
+  - A cyclic list/dict passes `_check_context` because it is de-duplicated by `id`. `_size`
+    (`engine.py:236-254`) then loops forever on `$var`.
+  - A shared-subtree DAG of depth 40 makes `_size` exponential (hang).
+- Reachability: `ReportModel.build` cannot produce any of these, so only a direct
+  `render_template` caller can.
+- Mitigation:
+  - Catch `ValueError` in `to_text`.
+  - Reject cycles in `_check_context` (ancestor set).
+  - Let `_size` stop early against the remaining budget, or memoize by `id`.
+
+### [LOW] R4 Invisible code points outside the neutralize table (pre-existing, parity-locked)
+- The text backstop and `neutralize` pass these through: U+00AD, U+180E, U+2060-U+2064,
+  U+FFF9-U+FFFB, the Hangul fillers U+115F/U+1160/U+3164/U+FFA0, variation selectors, and
+  tag characters U+E0000-U+E007F (invisible "ASCII smuggling").
+- This injects no terminal command, but it can hide text in a path or message (CWE-451).
+  Keep the move verbatim now. Widen the table in Story 03.0, and update the legacy sink and
+  the parity tests in the same change.
+
+### [INFO]
+- `ensure_ascii` writes lone surrogates as `\udXXX` escapes. This is the same as JSON v1, but
+  strict parsers (for example serde_json) reject them. Accepted.
+- `reporting.neutralize_text(non-str)` now raises `TemplateError` instead of
+  `AttributeError`. CLI callers pass `str`, so nothing changes for them.
+
+### Story 02.0 verdict: PASS_WITH_FOLLOWUP
+- No CRITICAL finding. Single-pass substitution, JSON structure, escaping parity and purity hold.
+- R1 and R2 are gaps in M13 (render-time cap). M13 is a mandatory mitigation, so both must be
+  fixed and tested before Story 02.0 merges to `master`.
+- R3 and R4 are tracked follow-ups (R4 is for Story 03.0).

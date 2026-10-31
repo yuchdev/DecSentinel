@@ -236,13 +236,17 @@ def to_text(value: JsonValue) -> str:
 
     :param value: A JSON scalar.
     :returns: Its text.
-    :raises TemplateError: When ``value`` is a container or not JSON data.
+    :raises TemplateError: When ``value`` is a container or not JSON data, or an
+        ``int`` too long for the interpreter's int-to-text limit.
     """
     if isinstance(value, str):
         return value
     if not is_scalar(value):
         raise TemplateError(f"a {_kind_name(value)} cannot be emitted as text; reduce it with join, len or json")
-    return json.dumps(value)
+    try:
+        return json.dumps(value)
+    except ValueError:
+        raise TemplateError("a number is too long to be emitted as text") from None
 
 
 def _scalar_text(value: JsonValue, name: str) -> str:

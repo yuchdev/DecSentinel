@@ -39,7 +39,12 @@ Security contract (``docs/security/threat-model-0007-template-engine-2026-10-31.
   included, so every control and non-ASCII code point is escaped by serialization.
 * **M13 (render part)** -- every loop item counts against :data:`MAX_ITERATIONS`
   and every emitted character against :data:`MAX_OUTPUT_CHARS`; passing either
-  stops rendering with a :class:`TemplateError`. Output is never truncated.
+  stops rendering with a :class:`TemplateError`. Output is never truncated. Each
+  piece of a line or ``$str`` is charged as it is appended, a ``json``/``join``
+  filter is refused before it materializes a result past the remaining budget, and
+  sub-tree sizes are memoized and bounded, so the cap fires early rather than after
+  a huge value is built (R1); an ``append`` loop extends a segment list, never
+  re-copies the line (R2); a cyclic context is rejected (R3).
 * **M14 (render part)** -- substitution is single-pass: a substituted value is
   appended to the output and never re-scanned, so ``{run.id}`` or ``{{`` inside a
   message stays literal. There is no ``str.format``, ``format_map``, ``%``, ``eval``
@@ -131,34 +136,44 @@ def _echo_name(ref: VarRef) -> str:
 def _check_context(context: object):
     """Reject a context that is not a JSON-shaped tree (M14).
 
-    Walks iteratively, so depth cannot overflow the stack; a container reached twice
-    (shared sub-trees such as ``documents_with_problems``) is checked once.
+    Walks iteratively (depth-first with explicit leave markers), so depth cannot
+    overflow the stack. A container reached twice through different parents (shared
+    sub-trees such as ``documents_with_problems``) is checked once; a container met
+    again while it is still on the current path is a cycle and is rejected (R3).
 
     :param context: The render context.
     :raises TemplateError: When the root is not a ``dict``, or any node is not an
         exact ``dict``/``list``/``str``/``int``/``bool``/``None`` or finite ``float``,
-        or a key is not a string. The offending value is never echoed.
+        a key is not a string, or the tree holds a cycle. The offending value is
+        never echoed.
     """
     if type(context) is not dict:
         raise TemplateError("the render context must be a JSON object")
-    seen: set[int] = set()
-    stack: list[object] = [context]
+    done: set[int] = set()
+    on_path: set[int] = set()
+    stack: list[tuple[object, bool]] = [(context, False)]
     while stack:
-        value = stack.pop()
+        value, leaving = stack.pop()
+        if leaving:
+            on_path.discard(id(value))
+            done.add(id(value))
+            continue
         kind = type(value)
-        if kind is dict:
-            if id(value) in seen:
+        if kind is dict or kind is list:
+            marker = id(value)
+            if marker in on_path:
+                raise TemplateError("the render context holds a reference cycle")
+            if marker in done:
                 continue
-            seen.add(id(value))
-            for key, item in value.items():
-                if type(key) is not str:
-                    raise TemplateError("the render context has a non-string object key")
-                stack.append(item)
-        elif kind is list:
-            if id(value) in seen:
-                continue
-            seen.add(id(value))
-            stack.extend(value)
+            on_path.add(marker)
+            stack.append((value, True))
+            if kind is dict:
+                for key, item in value.items():
+                    if type(key) is not str:
+                        raise TemplateError("the render context has a non-string object key")
+                    stack.append((item, False))
+            else:
+                stack.extend((item, False) for item in value)
         elif value is None or kind in (str, int, bool):
             continue
         elif kind is float and math.isfinite(value):
@@ -232,26 +247,136 @@ class _Budget:
         if self.chars > MAX_OUTPUT_CHARS:
             raise TemplateError(f"rendering stopped: output larger than {MAX_OUTPUT_CHARS} characters")
 
+    def remaining(self) -> int:
+        """Return how many characters may still be emitted.
 
-def _size(value: JsonValue) -> int:
-    """Estimate the serialized size of a JSON value, iteratively.
+        :returns: ``MAX_OUTPUT_CHARS`` minus the characters charged so far (at least 0).
+        """
+        return max(MAX_OUTPUT_CHARS - self.chars, 0)
 
-    :param value: A context sub-tree.
-    :returns: At least one per node, plus the length of every string and key.
+    def reserve(self, estimate: int):
+        """Refuse work whose result would already pass the cap, without charging it (R1).
+
+        Used before a filter materializes a large string, so the cap fires before
+        the memory is allocated rather than after.
+
+        :param estimate: A lower bound on the characters about to be produced.
+        :raises TemplateError: When ``estimate`` exceeds :meth:`remaining`.
+        """
+        if estimate > self.remaining():
+            raise TemplateError(f"rendering stopped: output larger than {MAX_OUTPUT_CHARS} characters")
+
+
+def _scalar_size(value: JsonValue) -> int:
+    """Return a lower bound on the compact JSON length of a non-container value.
+
+    :param value: A scalar.
+    :returns: ``len + 2`` for a string (its quotes), else 1.
     """
-    total = 0
-    stack: list[JsonValue] = [value]
+    return len(value) + 2 if isinstance(value, str) else 1
+
+
+def _size(value: JsonValue, limit: int, memo: dict[int, tuple[JsonValue, int]]) -> int:
+    """Return a lower bound on the serialized size of a JSON value, bounded by ``limit``.
+
+    Iterative post-order walk. Every container's size is memoized by ``id`` (the
+    memo pins the object, so an ``id`` is never reused while cached), so a shared
+    sub-tree is walked once however often it is referenced and a doubling DAG costs
+    linear time. The walk stops as soon as any sub-tree reaches ``limit + 1``,
+    since the whole value is then at least that large (R3). The bound never
+    overestimates: brackets, commas, quotes and ``":"`` are counted at their
+    compact minimum and every scalar as at least one character.
+
+    :param value: A context sub-tree or thawed template literal.
+    :param limit: The remaining output budget.
+    :param memo: Container sizes already computed in this render.
+    :returns: The lower bound, saturated at ``limit + 1``.
+    :raises TemplateError: When the value holds a reference cycle.
+    """
+    cap = limit + 1
+    if not isinstance(value, (dict, list)):
+        return min(_scalar_size(value), cap)
+    pending: set[int] = set()
+    stack: list[tuple[JsonValue, bool]] = [(value, False)]
     while stack:
-        item = stack.pop()
-        total += 1
+        item, leaving = stack.pop()
+        marker = id(item)
+        if not leaving:
+            if marker in memo:
+                continue
+            if marker in pending:
+                raise TemplateError("the render context holds a reference cycle")
+            pending.add(marker)
+            stack.append((item, True))
+            children = item.values() if isinstance(item, dict) else item
+            stack.extend((child, False) for child in children if isinstance(child, (dict, list)))
+            continue
+        pending.discard(marker)
+        total = 2 + len(item)
         if isinstance(item, dict):
-            total += sum(len(key) for key in item)
-            stack.extend(item.values())
-        elif isinstance(item, list):
-            stack.extend(item)
-        elif isinstance(item, str):
-            total += len(item)
-    return total
+            total += sum(len(key) + 3 for key in item)
+            children = item.values()
+        else:
+            children = item
+        for child in children:
+            total += memo[id(child)][1] if isinstance(child, (dict, list)) else _scalar_size(child)
+            if total >= cap:
+                break
+        memo[marker] = (item, min(total, cap))
+        if total >= cap:
+            return cap
+    return min(memo[id(value)][1], cap)
+
+
+class _Lines:
+    """Text output lines whose last (open) line is kept as a list of segments (R2).
+
+    An ``append`` loop extends the open line by adding one segment, so many appends
+    cost linear time; the segments are joined once, when the next line starts or
+    when :meth:`finish` is called.
+    """
+
+    __slots__ = ("_closed", "_open")
+
+    def __init__(self):
+        """Start with no lines."""
+        self._closed: list[str] = []
+        self._open: Optional[list[str]] = None
+
+    def has_line(self) -> bool:
+        """Return whether any line was started.
+
+        :returns: ``True`` once :meth:`start` or :meth:`extend` was called.
+        """
+        return self._open is not None
+
+    def start(self, text: str):
+        """Close the open line, if any, and open a new one holding ``text``.
+
+        :param text: The first segment of the new line.
+        """
+        if self._open is not None:
+            self._closed.append("".join(self._open))
+        self._open = [text]
+
+    def extend(self, text: str):
+        """Add ``text`` to the open line, or open the first line with it.
+
+        :param text: The segment.
+        """
+        if self._open is None:
+            self._open = [text]
+        else:
+            self._open.append(text)
+
+    def finish(self) -> list[str]:
+        """Return every line, the open one joined.
+
+        :returns: The output lines in order.
+        """
+        if self._open is None:
+            return list(self._closed)
+        return [*self._closed, "".join(self._open)]
 
 
 class _Renderer:
@@ -265,6 +390,36 @@ class _Renderer:
         self._context = context
         self._aliases: dict[str, JsonValue] = {}
         self._budget = _Budget()
+        self._sizes: dict[int, tuple[JsonValue, int]] = {}
+
+    def _bounded_size(self, value: JsonValue) -> int:
+        """Return :func:`_size` of ``value`` against the remaining budget.
+
+        :param value: A JSON value.
+        :returns: A lower bound on its serialized length, at most remaining + 1.
+        """
+        return _size(value, self._budget.remaining(), self._sizes)
+
+    def _estimate(self, name: str, value: JsonValue, args: tuple[str, ...]) -> int:
+        """Return a lower bound on the length a materializing filter would produce (R1).
+
+        :param name: The filter name.
+        :param value: Its input.
+        :param args: Its literal arguments.
+        :returns: The bound for ``json`` and ``join``; 0 for any other filter, whose
+            output is bounded by its (already present) scalar input.
+        """
+        if name == "json":
+            return self._bounded_size(value)
+        if name == "join" and type(value) is list and args and isinstance(args[0], str):
+            limit = self._budget.remaining() + 1
+            total = len(args[0]) * max(len(value) - 1, 0)
+            for item in value:
+                if total >= limit:
+                    break
+                total += len(item) if isinstance(item, str) else 1
+            return total
+        return 0
 
     # ---- values
 
@@ -306,6 +461,7 @@ class _Renderer:
                 raise TemplateError(f"variable {_echo_name(ref)} is not present in the render context")
             value = None
         for call in ref.filters:
+            self._budget.reserve(self._estimate(call.name, value, call.args))
             try:
                 value = apply_filter(call.name, value, call.args)
             except TemplateError as exc:
@@ -313,7 +469,11 @@ class _Renderer:
         return value
 
     def _interpolate(self, text: Interpolation) -> str:
-        """Render an interpolation in a single pass (M14).
+        """Render an interpolation in a single pass (M14), charging each piece (R1).
+
+        Every literal and substituted piece is charged against the output budget as
+        it is appended, so one long line or ``$str`` stops at the cap instead of
+        being built in full first. Callers must not charge the result again.
 
         :param text: The parsed text.
         :returns: Literals and substituted values concatenated; values are never
@@ -322,13 +482,15 @@ class _Renderer:
         pieces: list[str] = []
         for part in text.parts:
             if isinstance(part, str):
-                pieces.append(part)
-                continue
-            value = self._value(part)
-            try:
-                pieces.append(to_text(value))
-            except TemplateError as exc:
-                raise TemplateError(f"variable {_echo_name(part)}: {exc}") from None
+                piece = part
+            else:
+                value = self._value(part)
+                try:
+                    piece = to_text(value)
+                except TemplateError as exc:
+                    raise TemplateError(f"variable {_echo_name(part)}: {exc}") from None
+            self._budget.charge(len(piece))
+            pieces.append(piece)
         return "".join(pieces)
 
     def _items(self, ref: VarRef) -> list[JsonValue]:
@@ -403,8 +565,9 @@ class _Renderer:
         output = template.output
         if not isinstance(output, TextOutput) or output.join != "\n":
             raise TemplateError("a text template needs a text output with join \\n")
-        lines: list[str] = []
-        self._nodes(template.lines, lines)
+        buffer = _Lines()
+        self._nodes(template.lines, buffer)
+        lines = buffer.finish()
         for line in lines:
             if neutralize(line) != line:
                 raise TemplateError("a rendered line holds a control or format character from an unfiltered value")
@@ -413,11 +576,11 @@ class _Renderer:
             rendered += output.join
         return rendered
 
-    def _nodes(self, nodes: Sequence[TextNode], lines: list[str]):
+    def _nodes(self, nodes: Sequence[TextNode], lines: _Lines):
         """Render text nodes into ``lines``.
 
         :param nodes: The nodes.
-        :param lines: The output lines, extended in place.
+        :param lines: The output line buffer, extended in place.
         """
         for node in nodes:
             if isinstance(node, LineNode):
@@ -432,28 +595,30 @@ class _Renderer:
             else:
                 raise TemplateError("unknown text node")
 
-    def _emit(self, lines: list[str], line: str):
-        """Append one output line, charging the budget.
+    def _emit(self, lines: _Lines, line: str):
+        """Start one output line, charging its line break.
 
-        :param lines: The output lines.
-        :param line: The new line.
+        :param lines: The output line buffer.
+        :param line: The new line; its characters were charged by :meth:`_interpolate`.
         """
-        self._budget.charge(len(line) + 1)
-        lines.append(line)
+        self._budget.charge(1)
+        lines.start(line)
 
-    def _loop(self, node: LoopNode, lines: list[str]):
+    def _loop(self, node: LoopNode, lines: _Lines):
         """Render a loop in its placement.
 
         :param node: The loop node (its ``when`` already holds).
-        :param lines: The output lines.
+        :param lines: The output line buffer.
         """
         items = self._items(node.over)
         if node.placement == PLACEMENT_BLOCK:
-            for item in items:
-                self._budget.iterate()
-                self._aliases[node.alias] = item
-                self._nodes(node.body, lines)
-            self._aliases.pop(node.alias, None)
+            try:
+                for item in items:
+                    self._budget.iterate()
+                    self._aliases[node.alias] = item
+                    self._nodes(node.body, lines)
+            finally:
+                self._aliases.pop(node.alias, None)
             return
         if node.placement not in (PLACEMENT_ONE_LINE, PLACEMENT_APPEND) or node.text is None:
             raise TemplateError("unknown loop placement")
@@ -461,21 +626,22 @@ class _Renderer:
             return
         pieces: list[str] = []
         self._budget.charge(len(node.prefix) + len(node.suffix))
-        for position, item in enumerate(items):
-            self._budget.iterate()
-            self._aliases[node.alias] = item
-            piece = self._interpolate(node.text)
-            separator = node.separator if position else ""
-            self._budget.charge(len(separator) + len(piece))
-            pieces.append(separator)
-            pieces.append(piece)
-        self._aliases.pop(node.alias, None)
+        try:
+            for position, item in enumerate(items):
+                self._budget.iterate()
+                self._aliases[node.alias] = item
+                separator = node.separator if position else ""
+                self._budget.charge(len(separator))
+                pieces.append(separator)
+                pieces.append(self._interpolate(node.text))
+        finally:
+            self._aliases.pop(node.alias, None)
         segment = node.prefix + "".join(pieces) + node.suffix
-        if node.placement == PLACEMENT_APPEND and lines:
-            lines[-1] += segment
+        if node.placement == PLACEMENT_APPEND and lines.has_line():
+            lines.extend(segment)
         else:
             self._budget.charge(1)
-            lines.append(segment)
+            lines.start(segment)
 
     # ---- json
 
@@ -504,7 +670,7 @@ class _Renderer:
         :returns: The JSON value.
         """
         if isinstance(node, JsonLiteral):
-            self._budget.charge(_size(node.value))
+            self._budget.charge(self._bounded_size(node.value))
             return node.value
         if isinstance(node, JsonArray):
             return [self._evaluate(item) for item in node.items]
@@ -520,20 +686,21 @@ class _Renderer:
             return self._json_var(node)
         if isinstance(node, JsonFor):
             values: list[JsonValue] = []
-            for item in self._items(node.over):
-                self._budget.iterate()
-                self._aliases[node.alias] = item
-                values.append(self._evaluate(node.each))
-            self._aliases.pop(node.alias, None)
+            items = self._items(node.over)
+            try:
+                for item in items:
+                    self._budget.iterate()
+                    self._aliases[node.alias] = item
+                    values.append(self._evaluate(node.each))
+            finally:
+                self._aliases.pop(node.alias, None)
             return values
         if isinstance(node, JsonIf):
             if self._holds(node.condition):
                 return self._evaluate(node.then)
             return None if node.otherwise is None else self._evaluate(node.otherwise)
         if isinstance(node, JsonStr):
-            text = self._interpolate(node.text)
-            self._budget.charge(len(text))
-            return text
+            return self._interpolate(node.text)
         raise TemplateError("unknown json node")
 
     def _json_var(self, node: JsonVar) -> JsonValue:
@@ -547,12 +714,12 @@ class _Renderer:
         if value is _MISSING or value is None:
             if node.has_default:
                 fallback = _thaw(node.default)
-                self._budget.charge(_size(fallback))
+                self._budget.charge(self._bounded_size(fallback))
                 return fallback
             if value is _MISSING:
                 raise TemplateError(f"variable {_echo_name(node.var)} is not present in the render context")
             return None
-        self._budget.charge(_size(value))
+        self._budget.charge(self._bounded_size(value))
         return value
 
 
@@ -589,20 +756,24 @@ def render_template(
     :returns: The rendered report; identical bytes for identical inputs.
     :raises TemplateError: For a non-template, a missing required extension, a
         context that is not JSON-shaped, an absent variable, a filter given the wrong
-        kind of value, or a render past the M13 caps. Messages never echo context data.
+        kind of value, a context holding a reference cycle or a value that cannot be
+        rendered (such as an int too long to print, R3), or a render past the M13
+        caps. Messages never echo context data.
     """
     if not isinstance(template, Template):
         raise TemplateError("render_template needs a validated Template")
     _check_extensions(template, extensions)
-    _check_context(context)
-    renderer = _Renderer(MappingProxyType(context))
     try:
+        _check_context(context)
+        renderer = _Renderer(MappingProxyType(context))
         if template.type == "text":
             return renderer.text(template)
         if template.type == "json":
             return renderer.json(template)
     except RecursionError:
         raise TemplateError("template nesting is too deep to render") from None
+    except (ValueError, TypeError, OverflowError):
+        raise TemplateError("the render context holds a value that cannot be rendered") from None
     raise TemplateError("unknown template type")
 
 
