@@ -20,6 +20,7 @@ import json
 from dataclasses import asdict
 
 from docsentinel.models import ScanResult
+from docsentinel.telemetry.filters import neutralize as _neutralize
 from docsentinel.telemetry.model import ADVISORY_BANNER  # re-exported for existing callers
 
 
@@ -92,11 +93,14 @@ def neutralize_text(value: str) -> str:
     Public entry point for output paths outside the report renderers (for example the
     command-line error lines), so untrusted text such as a scanned path inside an
     exception message never reaches a terminal or log with raw control bytes.
+    Delegates to :func:`docsentinel.telemetry.filters.neutralize`, the moved copy of
+    :func:`_neutralize_controls` (Story 02.0 Task 02); the local original stays for
+    :func:`render` until the Story 03.0 cut-over deletes it.
 
     :param value: Text that may embed untrusted path or content characters.
     :returns: The text with every unsafe code point rendered as a visible escape.
     """
-    return _neutralize_controls(value)
+    return _neutralize(value)
 
 
 def _escape_property(value: str) -> str:

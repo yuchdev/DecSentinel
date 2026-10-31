@@ -15,7 +15,7 @@ wired into the CLI yet, so it can merge alone.
 | Task | Deliverable |
 |---|---|
 | [01](/docs/roadmap/0007-telemetry-driven-reporting/02.0-template-engine/01-template-schema-and-loader.md) | Template dataclasses/validation, variable parser, `variables_used` lint, condition grammar, trust rule, `TemplateError` -- ✅ Done 2026-10-31: `telemetry/loader.py` (`load_template`, `validate_template`, `TemplateError`, `FILTERS` signature table) with threat-model mitigations M1-M12, M13 depth, M14 load-time, M16, M17; M15 `model` bound in `ReportModel.build` |
-| [02](/docs/roadmap/0007-telemetry-driven-reporting/02.0-template-engine/02-renderer-filters-and-trust.md) | `text` and `json` renderers, `block`/`one-line`/`append` placement, filter table (`neutralize`, `gha_*`, `json`, …) |
+| [02](/docs/roadmap/0007-telemetry-driven-reporting/02.0-template-engine/02-renderer-filters-and-trust.md) | `text` and `json` renderers, `block`/`one-line`/`append` placement, filter table (`neutralize`, `gha_*`, `json`, …) -- ✅ Done 2026-10-31: `telemetry/engine.py` (`render_template`) and `telemetry/filters.py` (moved neutralization tables, `TemplateError`, `apply_filter`); threat-model M6 github golden, M8 `ensure_ascii` pin, M13 output/iteration caps, M14 render-time part, filter parity/sweep and no-I/O render tested; `reporting.neutralize_text` re-pointed, `reporting.render()` unchanged |
 
 ## Definition of done
 

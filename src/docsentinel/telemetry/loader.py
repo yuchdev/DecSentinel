@@ -67,9 +67,10 @@ its every byte is hostile input. Mitigations implemented here:
   ``frozenset`` and ``MappingProxyType``; only packaged templates are cached, keyed
   by resolved resource path, ``mtime_ns`` and size.
 
-``neutralize`` is currently taken from :func:`docsentinel.reporting.neutralize_text`;
-Task 02 moves it to ``telemetry/filters.py`` and re-points this import. This module
-is deliberately not re-exported from ``docsentinel.telemetry`` (``reporting`` imports
+``neutralize``, :class:`TemplateError` and :data:`MAX_MESSAGE` come from
+:mod:`docsentinel.telemetry.filters` (Task 02), the stdlib-only bottom layer, and are
+re-exported here so ``loader.TemplateError`` keeps working. This module is
+deliberately not re-exported from ``docsentinel.telemetry`` (``reporting`` imports
 that package, so a re-export would be an import cycle).
 """
 
@@ -89,7 +90,9 @@ from typing import Any, Final, Optional, Union
 
 from docsentinel.detectors.path_boundaries import escapes_via_symlink, is_ds116_owned
 from docsentinel.markdown_blocks import ReferenceStatus, resolve_local_reference
-from docsentinel.reporting import neutralize_text
+from docsentinel.telemetry.filters import MAX_MESSAGE as MAX_MESSAGE  # re-exported (M16 bound)
+from docsentinel.telemetry.filters import TemplateError
+from docsentinel.telemetry.filters import neutralize as neutralize_text
 from docsentinel.telemetry.model import CONTEXT_SCHEMA, UNTRUSTED, Variable
 
 #: The one supported template format version.
@@ -112,9 +115,6 @@ MAX_FILTER_ARG: Final[int] = 256
 
 #: Maximum characters of one echoed fragment (M16).
 MAX_ECHO: Final[int] = 80
-
-#: Maximum characters of a whole :class:`TemplateError` message (M16).
-MAX_MESSAGE: Final[int] = 512
 
 #: Packaged-or-directory template name (M9); any other source is a path.
 NAME_PATTERN: Final[re.Pattern[str]] = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
@@ -161,24 +161,6 @@ _UTF8_BOM = b"\xef\xbb\xbf"
 _SCALAR = "scalar"
 _LIST = "list"
 _DICT = "dict"
-
-
-class TemplateError(Exception):
-    """An unreadable, oversized, unparseable or invalid report template (spec §10).
-
-    The message is neutralized and bounded on construction, so ``str()`` of the
-    error is safe to print by any caller, not only the CLI (M16).
-    """
-
-    def __init__(self, message: str):
-        """Initialise the error with a neutralized, bounded message.
-
-        :param message: The diagnostic; hostile fragments must already be echoed.
-        """
-        safe = neutralize_text(message)
-        if len(safe) > MAX_MESSAGE:
-            safe = safe[: MAX_MESSAGE - 3] + "..."
-        super().__init__(safe)
 
 
 def _echo(value: str) -> str:
