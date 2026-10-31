@@ -619,3 +619,30 @@ Closed:
   cap with time and traced-peak bounds, and both fail on b308240. The tests also cover
   byte-identity with `json.dumps` across indent and `sort_keys`, the exact cap boundary, and
   thaw-once with step charging.
+
+### Re-audit (security-auditor, 2026-10-31, after R7 fix 7d26bec)
+- **R7 closed.** I fuzzed `_JsonStream` against `json.dumps(ensure_ascii=True)`: 3 seeds x 20000
+  random trees x 5 indents x `sort_keys`. Inputs covered lone surrogates, non-BMP characters,
+  C0/DEL, U+2028, U+202E, BOM, quotes and backslashes, `-0.0`, subnormals, `2**200` and shared
+  sub-trees. Result: 0 mismatches. Every output parsed. A cap of exactly `len` passes and `len-1`
+  raises. The fast-path edge (`_FAST_CHUNK_CHARS // 24`, +-2 non-BMP strings) matches. Every
+  string and key goes through C `encode_basestring_ascii` or `json.dumps`. No path emits raw
+  context text, so JSON structure cannot be forged (CWE-116). A non-str key (TypeError), an int
+  over 4300 digits (ValueError) and fast-path RecursionError all become `TemplateError`.
+- Memory: depth-30 template arrays and `$default` x `$for`, with and without `indent: 8`, now stop
+  on `MAX_STEPS` or the cap at about 200 MB peak RSS in at most 8 s (it was up to 540 MB). The
+  bound is linear in `MAX_STEPS` and the shape is template-authored (T3). **Accepted**, no lower
+  bound required.
+- **[LOW] R8 single-scalar overshoot (follow-up).** `_JsonStream._value` encodes a whole string
+  before `_emit` charges it. The earlier charge only bounds `len+2`, so one context string can
+  build up to 6x its length in transient memory (12x for non-BMP), at most once per render. A
+  probe of a 10M-character NUL string under a 1000-character cap built a 60M piece. The string
+  comes from untrusted data, but the factor is a constant of input already held in memory, and
+  nothing multiplies it. Mitigation (python-expert): encode a string longer than
+  `remaining // 6` in slices, or reject it first using `6*len` as the upper bound.
+- **[LOW] R9 quadratic `_fast` re-walk on deep chains (accepted).** `_size` stops at saturation
+  without memoizing ancestors, so each level of a narrow chain walks it again. Depth 500k did
+  not finish. Reachable depth is at most about 40 (`MAX_NESTING` 32 plus the fixed context
+  shape), so the cost stays negligible.
+- **Verdict: PASS_WITH_FOLLOWUP.** There are no CRITICAL or HIGH findings. Story 02.0 may merge.
+  R4 stays tracked, R6/R7 are closed, R8 is a follow-up and R9 is accepted.
