@@ -1133,18 +1133,19 @@ def test_materializing_filter_is_refused_before_it_runs(
     assert filter_name not in calls
 
 
-def test_many_appends_render_in_linear_time():
+def test_many_appends_render_in_linear_time(monkeypatch: pytest.MonkeyPatch):
     """
-    [Unit] engine: verifies 32000 append loops extending one line finish well under 2 s (R2).
+    [Unit] engine: verifies 32000 append loops extend one open line without re-joining it (R2).
 
     Scenario:
         Given a block loop over 32000 items whose body is an ``append`` loop with a 200-char prefix
         When rendered with the real caps (output about 6.5 MB)
-        Then it finishes within 2 s and the single line holds every segment.
+        Then the open line is joined exactly once, every append adds one segment,
+            the single line holds every segment, and the render ends within a generous 10 s.
 
     Boundaries:
         - Focus: regression: ``lines[-1] += segment`` re-copied the line per append (115 s at 32k)
-        - Fixtures/params: synthetic 32000-item list
+        - Fixtures/params: synthetic 32000-item list; counting spies on ``engine._Lines``
         - Scope: render_template, ``engine._Lines``
 
     On failure, first check:
@@ -1152,15 +1153,31 @@ def test_many_appends_render_in_linear_time():
     """
     count = 32_000
     prefix = "x" * 200
+    calls = {"start": 0, "extend": 0}
+    real_start, real_extend = engine._Lines.start, engine._Lines.extend
+
+    def start(self: Any, text: str):
+        """Count line starts, then start the line."""
+        calls["start"] += 1
+        real_start(self, text)
+
+    def extend(self: Any, text: str):
+        """Count appended segments, then extend the line."""
+        calls["extend"] += 1
+        real_extend(self, text)
+
+    monkeypatch.setattr(engine._Lines, "start", start)
+    monkeypatch.setattr(engine._Lines, "extend", extend)
     template = _text(
         _line("start", []),
         _block("pending", "item", _inline("enabled_rules", "r", "{r}", ["r"], "append", prefix=prefix)),
     )
     context = _context(pending=["p"] * count, enabled_rules=["r"])
 
-    with _deadline(2.0):
+    with _deadline(10.0):
         rendered = render_template(template, context)
 
+    assert calls == {"start": 1, "extend": count}
     assert "\n" not in rendered
     assert len(rendered) == len("start") + count * (len(prefix) + 1)
 
@@ -1219,6 +1236,210 @@ def test_int_too_long_to_print_raises_template_error(template: Template):
     """
     with pytest.raises(TemplateError):
         render_template(template, _context(documents_count=10**5000))
+
+
+# --------------------------------------------------------------------------- M13 regressions (R5)
+
+_NEVER: dict[str, Any] = {"var": "profile", "eq": "nope"}
+_ALWAYS: dict[str, Any] = {"var": "profile", "eq": "fast"}
+
+
+def _nest(*body: dict[str, Any]) -> dict[str, Any]:
+    """Return two nested block loops over ``pending`` around ``body``."""
+    return _block("pending", "a", _block("pending", "b", *body))
+
+
+def _json_nest(each: Any) -> Template:
+    """Return a json template with two nested ``$for`` loops over ``pending`` around ``each``."""
+    return _json({"$for": "pending", "as": "a", "each": {"$for": "pending", "as": "b", "each": each}})
+
+
+def _count_steps(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
+    """Spy on ``engine._Budget.step`` and return the running step total."""
+    total = {"steps": 0}
+    real = engine._Budget.step
+
+    def step(self: Any, count: int = 1):
+        """Add ``count`` to the total, then take the real step."""
+        total["steps"] += count
+        real(self, count)
+
+    monkeypatch.setattr(engine._Budget, "step", step)
+    return total
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        pytest.param(_text(_nest(*[_line("x", [], when=_NEVER)] * 100)), id="false-when-lines"),
+        pytest.param(
+            _text(_nest(*[{"type": "group", "when": _NEVER, "body": [_line("x", [])]}] * 100)),
+            id="false-groups",
+        ),
+        pytest.param(_text(_nest(*[_block("enabled_rules", "q", _line("x", []))] * 100)), id="empty-inner-loops"),
+        pytest.param(
+            _text(_nest(*[_inline("enabled_rules", "r", "{r}", ["r"], "one-line")] * 100)),
+            id="empty-inline-loops",
+        ),
+        pytest.param(_json_nest([{"$if": _NEVER, "then": 1}] * 50), id="json-if-false"),
+        pytest.param(
+            _json_nest({f"k{index}": {"$omit_if": _ALWAYS, "value": 1} for index in range(60)}),
+            id="json-omit-if-true",
+        ),
+    ],
+)
+def test_work_that_emits_nothing_is_charged_steps(monkeypatch: pytest.MonkeyPatch, template: Template):
+    """
+    [Unit] engine: verifies non-emitting work is charged against MAX_STEPS (R5).
+
+    Scenario:
+        Given ``MAX_STEPS`` lowered to 5000 and two nested loops of 10 items (100 iterations, far under
+        ``MAX_ITERATIONS``) around 50-100 false ``when`` lines, false groups, loops over an empty list,
+        ``$if`` false or ``$omit_if`` true -- shapes that emit no output at all
+        When rendered
+        Then ``TemplateError`` about the step budget is raised, not about loop items or output.
+
+    Boundaries:
+        - Focus: regression: false conditions, empty loops, ``$if``/``$omit_if`` were never charged
+        - Fixtures/params: six non-emitting shapes; lowered step cap
+        - Scope: render_template, ``_Budget.step`` in ``_nodes``, ``_holds`` and ``_evaluate``
+
+    On failure, first check:
+        - The ``step`` calls in ``_Renderer._nodes``, ``_Renderer._holds`` and ``_Renderer._evaluate``
+    """
+    monkeypatch.setattr(engine, "MAX_STEPS", 5000)
+    context = _context(pending=["p"] * 10, enabled_rules=[])
+
+    with pytest.raises(TemplateError, match="template work larger than 5000 steps"):
+        render_template(template, context)
+
+
+def test_false_condition_nest_stops_at_the_real_step_cap():
+    """
+    [Unit] engine: verifies the 300x300 x 100 false-line probe stops at the real MAX_STEPS (R5).
+
+    Scenario:
+        Given the real caps and two nested loops of 300 items around 100 false ``when`` lines
+            (90000 iterations, about 18M steps, zero output; 27 s before the fix)
+        When rendered
+        Then ``TemplateError`` naming ``MAX_STEPS`` is raised, within a generous 60 s.
+
+    Boundaries:
+        - Focus: regression: the auditor's R5 probe with the shipped cap, not a lowered one
+        - Fixtures/params: synthetic 300-item list
+        - Scope: render_template, ``engine.MAX_STEPS``
+
+    On failure, first check:
+        - The value of ``engine.MAX_STEPS`` and the ``step`` call in ``_Renderer._nodes``
+    """
+    template = _text(_nest(*[_line("x", [], when=_NEVER)] * 100))
+    context = _context(pending=["p"] * 300)
+
+    with _deadline(60.0), pytest.raises(TemplateError, match=f"larger than {engine.MAX_STEPS} steps"):
+        render_template(template, context)
+
+
+def test_step_cap_boundary_is_exact(monkeypatch: pytest.MonkeyPatch):
+    """
+    [Unit] engine: verifies a render costing exactly MAX_STEPS succeeds and one step fewer fails (R5).
+
+    Scenario:
+        Given the step total of a small template with false lines, an empty loop and a rendered line
+        When rendered with ``MAX_STEPS`` set to that total, then to that total minus one
+        Then the first render returns the same output as an uncapped render and the second raises.
+
+    Boundaries:
+        - Focus: edge case: the cap is "more than N", never truncating
+        - Fixtures/params: spy on ``_Budget.step``; inline context
+        - Scope: render_template, ``_Budget.step``
+
+    On failure, first check:
+        - The ``>`` comparison in ``_Budget.step``
+    """
+    template = _text(
+        _block("pending", "a", _line("x", [], when=_NEVER), _block("enabled_rules", "q", _line("y", []))),
+        _line("{profile|lower}", ["profile"]),
+    )
+    context = _context(pending=["p"] * 3, enabled_rules=[])
+    total = _count_steps(monkeypatch)
+    expected = render_template(template, context)
+    steps = total["steps"]
+
+    monkeypatch.setattr(engine, "MAX_STEPS", steps)
+    assert render_template(template, context) == expected == "fast"
+    monkeypatch.setattr(engine, "MAX_STEPS", steps - 1)
+    with pytest.raises(TemplateError, match=f"larger than {steps - 1} steps"):
+        render_template(template, context)
+
+
+@pytest.mark.parametrize(
+    ("text", "used", "filter_name", "built"),
+    [
+        pytest.param("{enabled_rules|json|len}", ["enabled_rules"], "json", 4, id="json-len"),
+        pytest.param("{enabled_rules|join(',')|len}", ["enabled_rules"], "join", 4, id="join-len"),
+        pytest.param("{notice|lower|len}", ["notice"], "lower", 6, id="lower-len"),
+    ],
+)
+def test_discarded_filter_results_are_charged_to_the_work_budget(
+    monkeypatch: pytest.MonkeyPatch, text: str, used: list[str], filter_name: str, built: int
+):
+    """
+    [Unit] engine: verifies a filter result discarded by ``len`` is still charged to MAX_WORK_CHARS (R5).
+
+    Scenario:
+        Given ``MAX_WORK_CHARS`` lowered to 10000, a value whose json/join/lower result is about 2000
+            characters, and one line repeating ``{x|<filter>|len}`` 10 times (only digits are emitted)
+        When rendered
+        Then ``TemplateError`` about the work budget is raised after a deterministic number of builds:
+            json/join are refused before the fifth build, ``lower`` is stopped once the sixth is charged.
+
+    Boundaries:
+        - Focus: regression: ``json|len``/``join|len`` were checked against the output budget but never charged
+        - Fixtures/params: three materializing filters; spy on ``engine.apply_filter``
+        - Scope: render_template, ``_Budget.build`` and ``_Budget.reserve`` in ``_Renderer._value``
+
+    On failure, first check:
+        - The ``build`` charge after ``apply_filter`` and the work check in ``_Budget.reserve``
+    """
+    calls: list[str] = []
+    real = engine.apply_filter
+
+    def spy(name: str, value: Any, args: tuple[str, ...] = ()) -> Any:
+        """Record the filter name, then apply the real filter."""
+        calls.append(name)
+        return real(name, value, args)
+
+    monkeypatch.setattr(engine, "MAX_WORK_CHARS", 10_000)
+    monkeypatch.setattr(engine, "apply_filter", spy)
+    context = _context(enabled_rules=["x" * 100] * 20, notice="N" * 2000)
+
+    with pytest.raises(TemplateError, match="filters built more than 10000 characters"):
+        render_template(_text(_line(text * 10, used)), context)
+    assert calls.count(filter_name) == built
+
+
+def test_discarded_filter_results_under_the_work_budget_still_render(monkeypatch: pytest.MonkeyPatch):
+    """
+    [Unit] engine: verifies ``json|len`` under the work budget renders the exact lengths.
+
+    Scenario:
+        Given ``MAX_WORK_CHARS`` lowered to 10000 and ``{enabled_rules|json|len}`` twice on one line
+        When rendered (about 4200 characters built)
+        Then the output is the two lengths of ``json.dumps(enabled_rules)``.
+
+    Boundaries:
+        - Focus: normal case: the work budget must not reject a render that fits
+        - Fixtures/params: lowered work cap
+        - Scope: render_template, ``_Budget.build``
+
+    On failure, first check:
+        - The work comparison in ``_Budget.build``
+    """
+    monkeypatch.setattr(engine, "MAX_WORK_CHARS", 10_000)
+    rules = ["x" * 100] * 20
+    template = _text(_line("{enabled_rules|json|len}" * 2, ["enabled_rules"]))
+
+    assert render_template(template, _context(enabled_rules=rules)) == str(len(json.dumps(rules))) * 2
 
 
 # --------------------------------------------------------------------------- determinism and sweep

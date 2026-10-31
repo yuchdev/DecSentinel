@@ -454,3 +454,115 @@ Holds:
 - R1 and R2 are gaps in M13 (render-time cap). M13 is a mandatory mitigation, so both must be
   fixed and tested before Story 02.0 merges to `master`.
 - R3 and R4 are tracked follow-ups (R4 is for Story 03.0).
+
+## Re-attack of the renderer caps (security-auditor, 2026-10-31, at 3c2f526)
+Scope: `telemetry/engine.py`, `telemetry/filters.py` after the R1/R2/R3 fixes. The old probes
+were re-run and new ones added (scratch scripts only; no product code edited).
+
+Closed:
+- **R1 closed.** One line `{documents|json}` x200 over a 1.1 MB corpus: with a 1 MB cap it now
+  stops with a peak of about 0 MB (was 435 MB). With the 64 MiB cap it stops at a 67 MB peak.
+  `join` over 100M characters, `join|json` and `json|json` are refused before they are built.
+- **R2 closed.** `append` x n is linear: n=32000 now takes 1.7 s (was 115 s). 1M appends take 30 s.
+- **R3 closed.** A self-cyclic list is rejected. A shared DAG of depth 40 stops at the cap
+  instead of hanging. A 5000-digit int gives a `TemplateError` in text, `$str`, `$var` and
+  `|json`. A 200k-deep list or dict gives a `TemplateError` (`RecursionError` is caught) in
+  about 6 s.
+
+### [MEDIUM] R5 Render CPU is not bounded: work that emits nothing is never charged (CWE-400, CWE-834)
+- Evidence: `_Budget` counts only loop items (`engine.py:231-238`) and emitted characters
+  (`:240-248`). Three kinds of work are not charged:
+  - A `line`/`group`/`loop` whose `when` is false (`_nodes`, `:585-596`).
+  - An inner loop over an empty list (`_loop`, `:613-626`).
+  - `$if` false, `$omit_if` true, and the `null` it yields (`:679-701`).
+- `_Budget.reserve` (`:257-267`) checks a `json`/`join` result against the remaining budget, but
+  it never charges it. A result reduced by `len` is never charged at all.
+- Probes (A1 template, loop nesting <= 4, nodes <= 10000):
+  - 300x300 iterations x 100 false-`when` lines took 27 s, about 3 us per node. At 300x300 x 1000
+    the run was killed by a 150 s CPU limit.
+  - The bound is MAX_ITERATIONS x MAX_NODES = 5M x 10k node evaluations, about 40 hours. This
+    needs only about 2236 documents nested twice, or 48 documents nested four times.
+  - 1000x1000 x 50 inner loops over an empty list: 120 s, with zero output.
+  - `{enabled_rules|json|len}` x200 on one line, each value 30M characters: 185 s and 1600 output
+    characters. `join|len` took 110 s. Inside a loop this is multiplied by the number of
+    iterations, with no limit.
+  - The caps themselves are slow even when a render stays inside them:
+    - 5M trivial text iterations: 27 s.
+    - 5M trivial json `$for` iterations: about 65 s.
+    - 64M empty lines: about 4 min and more than 1 GB, extrapolated from 13M lines in 49 s and
+      245 MB.
+- Impact: a contributor who controls the checkout and its template hangs the CI job until the
+  job timeout (the GitHub default is 6 h), without crossing either cap. This is the same
+  class as R2, which was merge-gating.
+- Mitigation (python-expert):
+  - Add a step budget, for example `MAX_STEPS` of about 20M, plus `_Budget.step()`. Charge one
+    step for each text/json node visited, each condition node evaluated and each filter call,
+    whether or not the node emits anything.
+  - Charge the length of every materialized `json`/`join` result (and `lower`/`upper`) to a
+    work budget, even when a later filter discards it. A separate `MAX_WORK_CHARS` of about
+    4 x MAX_OUTPUT_CHARS would do.
+  - Option: have the loader reject `json|len` and `join|len`, which have no use.
+  - Product decision: consider lowering MAX_ITERATIONS to 1M and MAX_OUTPUT_CHARS to 16 MiB.
+    Real reports are about 67k appends on the ADR 0003 corpus.
+- Tests (testing-expert), each must raise `TemplateError` in bounded time (op-count or
+  monkeypatched caps):
+  - nested loops x 1000 false-`when` lines;
+  - nested loops x empty inner loops;
+  - `{x|json|len}` repeated on one line;
+  - json `$for` x `$if` false.
+
+### [LOW] R6 `ensure_ascii` expansion is only bounded after serialization (accepted)
+- `_size` counts `len + 2` for a string. Serialization can be up to 12x longer (an astral code
+  point becomes `\udXXX\udXXX`), and the final `len(rendered)` check fires only after the string
+  is built.
+- Probes:
+  - 5.5M astral characters gave 66M of output, accepted and within the cap.
+  - 30M astral characters (120 MB of input) were refused, with a 499 MB peak.
+- The transient size is at most 12 x min(input, cap), about 800 MB, a constant factor of the
+  input that is already in memory. Accepted. Optional hardening: when `not s.isascii()`, add
+  the non-ASCII count x 5 to the estimate.
+
+### Re-attack verdict: BLOCK (merge gate for Story 02.0)
+- No CRITICAL. R1, R2 and R3 are fixed and verified, and R4 stays tracked for Story 03.0.
+- R5 is an open gap in mandatory mitigation M13. A hostile template can still keep the CI job
+  busy for hours while staying under both caps. By the rule already applied to R1/R2, Story 02.0
+  stays out of `master` until R5 is fixed and has regression tests. R6 is accepted.
+- This BLOCK comes from the M13 gate, not from a CRITICAL. After the step/work budget lands,
+  the expected verdict is PASS.
+
+### Status update (python-expert, 2026-10-31)
+- **R5 fixed.** `_Budget` now has a step budget and a work budget (`telemetry/engine.py`):
+  - `MAX_STEPS = 2_000_000`. One step is charged for each text/json node visited, each condition
+    node evaluated (an `in` condition one more per operand), each loop item, each variable
+    lookup and each filter call, whether or not anything is emitted.
+  - `MAX_WORK_CHARS = 4 x MAX_OUTPUT_CHARS`. The length of every string a filter builds is
+    charged, even when `len` discards it. `json`/`join` are refused before they are built when
+    their estimate would pass the work budget.
+  - Passing either budget raises `TemplateError` (`template work larger than N steps`,
+    `filters built more than N characters`). The spec is unchanged and the loader still accepts
+    `json|len`.
+- Why 2M and not the suggested 20M: on the review machine one step costs about 2.5 us, so 20M
+  steps would still allow about 50 s of render.
+- Margin: a 358-document scan with 5000 findings costs about 120k steps under the
+  severity-routing `github` template. That is 16x below the cap, and an integration test pins it
+  under `MAX_STEPS // 10`. With 20000 findings it costs about 480k steps, 4x below. Because each
+  loop item is also a step, `MAX_STEPS` now binds before `MAX_ITERATIONS`.
+- Probes re-run at the fix (machine load about 18):
+  - Every R5 shape now stops with `TemplateError` in 2-6 s. This covers false `when` lines,
+    `any`/`in` conditions, empty inner loops, 13 empty lines per item, the nested append loop,
+    `$for` x `$if` false and nested `$for` `$var`.
+  - `json|len` x200 and `join|len` x200 at 30M characters each now stop in 2-3 s (were 185 s
+    and 110 s).
+  - The json `$for` probes take 15-23 s only under `tracemalloc`, and about 5 s without it.
+- Regression tests (`tests/unit/test_telemetry_engine.py`):
+  - Six non-emitting shapes run with a lowered step cap.
+  - The 300x300 x 100 probe runs with the real cap.
+  - An exact cap boundary.
+  - `json|len`/`join|len`/`lower|len` with a lowered work cap, which also asserts how many
+    builds happen.
+  - The normal case under the work cap.
+  - `tests/integration/test_template_renderer_report.py` pins the realistic-report margin.
+  - The 32k-append test now uses a 10 s bound plus an exact count of segment starts and extends.
+- **R6 accepted.** The transient `ensure_ascii` expansion is at most 12 x min(input, cap), a
+  constant factor of a context that is already in memory. The final length check still refuses
+  any output past the cap. The optional non-ASCII estimate is not implemented.

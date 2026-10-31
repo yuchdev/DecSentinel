@@ -16,6 +16,7 @@ import pytest
 from docsentinel import reporting
 from docsentinel.config import Config
 from docsentinel.models import Document, Finding, ScanResult
+from docsentinel.telemetry import engine
 from docsentinel.telemetry.engine import render_template
 from docsentinel.telemetry.filters import TemplateError, neutralize
 from docsentinel.telemetry.loader import LineNode, LoopNode, VarRef, validate_template
@@ -247,3 +248,49 @@ def test_spec_text_excerpt_renders_findings_under_their_document():
         f"  error: {hostile}: " + reporting._neutralize_controls(_HOSTILE_MESSAGE),
     ]
     assert all(neutralize(line) == line for line in rendered)
+
+
+def test_realistic_report_stays_far_below_the_step_budget(monkeypatch: pytest.MonkeyPatch):
+    """
+    [Integration] renderer: verifies a 358-document, 5000-finding report uses under a tenth of MAX_STEPS (R5).
+
+    Scenario:
+        Given an in-memory scan of 358 documents and 5000 located error/warning findings
+        When the severity-routing github template renders ``ReportModel.build`` of it under the real caps
+        Then it equals ``reporting.render(result, "github")`` and the steps charged stay below
+            ``MAX_STEPS // 10`` (the margin the engine documents).
+
+    Boundaries:
+        - Focus: the R5 step cap must never reject a realistic report (ADR 0003 corpus size)
+        - Fixtures/params: synthetic ScanResult; spy on ``engine._Budget.step``
+        - Scope: validate_template -> ReportModel.build -> render_template
+
+    On failure, first check:
+        - The value of ``engine.MAX_STEPS`` and the per-node ``step`` charges in ``_Renderer``
+    """
+    documents = tuple(Document(path=f"docs/d{index:03d}.md", bytes=1000) for index in range(358))
+    findings = tuple(
+        Finding(
+            rule="DS101",
+            path=documents[index % 358].path,
+            message="dangling link -> x.md",
+            severity=("error", "warning")[index % 2],
+            line=index + 1,
+        )
+        for index in range(5000)
+    )
+    result = ScanResult(profile="fast", documents=documents, findings=findings, enabled_rules=("DS101",), pending=())
+    total = {"steps": 0}
+    real = engine._Budget.step
+
+    def step(self: Any, count: int = 1):
+        """Add ``count`` to the total, then take the real step."""
+        total["steps"] += count
+        real(self, count)
+
+    monkeypatch.setattr(engine._Budget, "step", step)
+
+    rendered = render_template(validate_template(GITHUB_ROUTING), ReportModel.build(result, Config()))
+
+    assert rendered == reporting.render(result, "github")
+    assert 0 < total["steps"] < engine.MAX_STEPS // 10

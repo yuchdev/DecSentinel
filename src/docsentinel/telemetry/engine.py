@@ -44,7 +44,13 @@ Security contract (``docs/security/threat-model-0007-template-engine-2026-10-31.
   filter is refused before it materializes a result past the remaining budget, and
   sub-tree sizes are memoized and bounded, so the cap fires early rather than after
   a huge value is built (R1); an ``append`` loop extends a segment list, never
-  re-copies the line (R2); a cyclic context is rejected (R3).
+  re-copies the line (R2); a cyclic context is rejected (R3). Work that emits
+  nothing is bounded too (R5): every node visited, condition evaluated, loop item
+  and filter call costs one step against :data:`MAX_STEPS` (an ``in`` condition
+  one more per operand), and every string a filter builds is charged to
+  :data:`MAX_WORK_CHARS` even when a later filter (``len``) discards it, so false
+  ``when`` conditions, loops over empty lists, ``$if``/``$omit_if`` and
+  ``json|len`` cannot keep a render busy while staying under the output caps.
 * **M14 (render part)** -- substitution is single-pass: a substituted value is
   appended to the output and never re-scanned, so ``{run.id}`` or ``{{`` inside a
   message stays literal. There is no ``str.format``, ``format_map``, ``%``, ``eval``
@@ -102,6 +108,17 @@ MAX_OUTPUT_CHARS: Final[int] = 64 * 1024 * 1024
 
 #: Cap on loop items rendered across all ``loop``/``$for`` nodes (M13).
 MAX_ITERATIONS: Final[int] = 5_000_000
+
+#: Cap on render steps (M13, R5): one per text/json node visited, condition node
+#: evaluated, loop item and filter call, whether or not anything is emitted. A
+#: 358-document scan with 5000 findings costs at most about 120k steps under a
+#: severity-routing ``github`` template (16x margin; 20000 findings about 480k), while
+#: a hostile template stops within a few seconds (about 2.5 us per step).
+MAX_STEPS: Final[int] = 2_000_000
+
+#: Cap on characters built by filters across one render (M13, R5), charged even
+#: when a later filter such as ``len`` discards the string.
+MAX_WORK_CHARS: Final[int] = 4 * MAX_OUTPUT_CHARS
 
 #: Maximum characters of a variable name echoed in an error.
 _MAX_NAME_ECHO = 80
@@ -219,20 +236,43 @@ def _equal(left: object, right: object) -> bool:
 
 
 class _Budget:
-    """Iteration and output-size budget of one render call (M13)."""
+    """Iteration, step, work and output-size budget of one render call (M13, R5)."""
 
-    __slots__ = ("chars", "iterations")
+    __slots__ = ("chars", "iterations", "steps", "work")
 
     def __init__(self):
         """Start an empty budget."""
         self.chars = 0
         self.iterations = 0
+        self.steps = 0
+        self.work = 0
+
+    def step(self, count: int = 1):
+        """Count ``count`` render steps, whether or not they emit anything (R5).
+
+        :param count: Steps about to be taken.
+        :raises TemplateError: When :data:`MAX_STEPS` is passed.
+        """
+        self.steps += count
+        if self.steps > MAX_STEPS:
+            raise TemplateError(f"rendering stopped: template work larger than {MAX_STEPS} steps")
+
+    def build(self, count: int):
+        """Count ``count`` characters built by a filter, even if later discarded (R5).
+
+        :param count: Characters of the filter result.
+        :raises TemplateError: When :data:`MAX_WORK_CHARS` is passed.
+        """
+        self.work += count
+        if self.work > MAX_WORK_CHARS:
+            raise TemplateError(f"rendering stopped: filters built more than {MAX_WORK_CHARS} characters")
 
     def iterate(self):
-        """Count one loop item.
+        """Count one loop item (also one step).
 
-        :raises TemplateError: When :data:`MAX_ITERATIONS` is passed.
+        :raises TemplateError: When :data:`MAX_ITERATIONS` or :data:`MAX_STEPS` is passed.
         """
+        self.step()
         self.iterations += 1
         if self.iterations > MAX_ITERATIONS:
             raise TemplateError(f"rendering stopped: more than {MAX_ITERATIONS} loop items")
@@ -261,10 +301,13 @@ class _Budget:
         the memory is allocated rather than after.
 
         :param estimate: A lower bound on the characters about to be produced.
-        :raises TemplateError: When ``estimate`` exceeds :meth:`remaining`.
+        :raises TemplateError: When ``estimate`` exceeds :meth:`remaining`, or would
+            pass :data:`MAX_WORK_CHARS` (R5).
         """
         if estimate > self.remaining():
             raise TemplateError(f"rendering stopped: output larger than {MAX_OUTPUT_CHARS} characters")
+        if self.work + estimate > MAX_WORK_CHARS:
+            raise TemplateError(f"rendering stopped: filters built more than {MAX_WORK_CHARS} characters")
 
 
 def _scalar_size(value: JsonValue) -> int:
@@ -460,12 +503,16 @@ class _Renderer:
             if not ref.filters or ref.filters[0].name != "default":
                 raise TemplateError(f"variable {_echo_name(ref)} is not present in the render context")
             value = None
+        self._budget.step()
         for call in ref.filters:
+            self._budget.step()
             self._budget.reserve(self._estimate(call.name, value, call.args))
             try:
                 value = apply_filter(call.name, value, call.args)
             except TemplateError as exc:
                 raise TemplateError(f"variable {_echo_name(ref)}: {exc}") from None
+            if isinstance(value, str):
+                self._budget.build(len(value))
         return value
 
     def _interpolate(self, text: Interpolation) -> str:
@@ -516,7 +563,10 @@ class _Renderer:
         """
         if condition is None:
             return True
+        self._budget.step()
         if isinstance(condition, Compare):
+            if condition.op == "in":
+                self._budget.step(len(condition.operand))
             value = self._lookup(condition.var)
             if value is _MISSING:
                 value = None
@@ -583,6 +633,7 @@ class _Renderer:
         :param lines: The output line buffer, extended in place.
         """
         for node in nodes:
+            self._budget.step()
             if isinstance(node, LineNode):
                 if self._holds(node.when):
                     self._emit(lines, self._interpolate(node.text))
@@ -669,6 +720,7 @@ class _Renderer:
         :param node: The parsed node.
         :returns: The JSON value.
         """
+        self._budget.step()
         if isinstance(node, JsonLiteral):
             self._budget.charge(self._bounded_size(node.value))
             return node.value
@@ -758,7 +810,7 @@ def render_template(
         context that is not JSON-shaped, an absent variable, a filter given the wrong
         kind of value, a context holding a reference cycle or a value that cannot be
         rendered (such as an int too long to print, R3), or a render past the M13
-        caps. Messages never echo context data.
+        caps (output, loop items, steps or filter-built characters, R5). Messages never echo context data.
     """
     if not isinstance(template, Template):
         raise TemplateError("render_template needs a validated Template")
@@ -777,4 +829,4 @@ def render_template(
     raise TemplateError("unknown template type")
 
 
-__all__ = ["MAX_ITERATIONS", "MAX_OUTPUT_CHARS", "TemplateError", "render_template"]
+__all__ = ["MAX_ITERATIONS", "MAX_OUTPUT_CHARS", "MAX_STEPS", "MAX_WORK_CHARS", "TemplateError", "render_template"]
