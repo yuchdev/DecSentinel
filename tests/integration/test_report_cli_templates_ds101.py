@@ -164,6 +164,42 @@ def test_show_clean_documents_lists_clean_documents_in_text(
     assert any(line.startswith("  error: README.md: ") for line in shown)
 
 
+def test_legacy_text_and_github_shapes_are_intentionally_gone(
+    asset_case: Callable[[str, str], AssetCase],
+    capsys: pytest.CaptureFixture[str],
+):
+    """
+    [Integration] report cli templates ds101: pins that the pre-cutover text and github shapes are gone.
+
+    Scenario:
+        Given a fast scan with one dangling link and a clean document
+        When it is rendered with the default text format and with ``--format github``
+        Then text has no unindented ``error:`` line and no indented document inventory, and every
+            github annotation carries ``title=<rule>``.
+
+    Boundaries:
+        - Focus: the documented breaking change of Story 03.0 Task 02 (consumers migrate, see
+          ``docs/user/tutorial/report.md``)
+        - Fixtures/params: ds101/dangling_file_link + ds101/clean_document
+        - Scope: in-process CLI calls
+
+    On failure, first check:
+        - Whether ``templates/text.json`` or ``templates/github.json`` reverted to the legacy layout
+        - Update the migration notes in ``docs/user/tutorial/report.md`` if the change is deliberate
+    """
+    root = _composed_root(asset_case)
+
+    cli.main(["scan", str(root)])
+    text_lines = capsys.readouterr().out.split("\n")
+    cli.main(["scan", str(root), "--format", "github"])
+    github_lines = [line for line in capsys.readouterr().out.split("\n") if line]
+
+    assert not any(line.startswith(("error:", "warning:")) for line in text_lines)
+    assert "README.md (" in "\n".join(line for line in text_lines if not line.startswith(" "))
+    assert github_lines
+    assert all(line.startswith("::error file=README.md,") and ",title=DS101::" in line for line in github_lines)
+
+
 def test_template_path_wins_over_format(
     asset_case: Callable[[str, str], AssetCase],
     capsys: pytest.CaptureFixture[str],

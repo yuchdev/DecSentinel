@@ -690,3 +690,46 @@ Scope: `telemetry/templates/{text,github,json,json-v1,json-documents}.json`, `RU
 ### Task 01 verdict: PASS
 No CRITICAL/HIGH/MEDIUM. The open items are unchanged: R4 is tracked, R8 is a follow-up and R9
 is accepted.
+
+## Story 03.0 Task 02 review: CLI cutover (security-auditor, 2026-11-01, at 67a761f)
+Scope (c2708ab..HEAD, plus the uncommitted `cli.py` init guard): `scan --format NAME`,
+`--template PATH`, `--show-clean-documents`, the repo-config keys `report_templates_dir`,
+`report_show_clean_documents` and `report_include_run_meta`, `available_templates` /
+`load_named_template` / `packaged_template_names`, the `doctor` template lines, and error output.
+
+- **Containment (M9-M11).** A scratchpad probe built about 30 hostile repos (docsentinel.toml and
+  pyproject). It tried a `../` dir, an absolute dir, a dir symlinked out, a file symlinked out, a
+  `%2F..` dir, `x#/../..` and `tpl#x` + symlink, a FIFO template, a FIFO as the dir, a missing dir
+  and a file of 256 KiB + 1. Every case was refused, either by `load_config` (lexical check) or by
+  the loader gate. Listing uses `is_file(follow_symlinks=False)`, so a symlinked or special entry
+  is never listed. `load_named_template` re-runs the gate before it opens anything, so a name
+  added to the directory after listing does not skip the gate. No file outside the root was read
+  and nothing hung (FIFOs are never opened).
+- **Packaged wins.** A repo `text.json`/`github.json` was ignored for `--format text`, for the
+  default format and for `--format github`.
+- **`--format` is a name only.** A path, `../x`, ESC/OSC, U+202E, CR/LF + `::error::` or a
+  5000-char value gives `unknown --format`. The message is cut to 80 characters, `repr`-quoted and
+  then neutralized. `--format` no longer has argparse `choices`, so argparse never echoes the
+  value. `--help` shows only the packaged names (trusted).
+- **doctor / errors.** A hostile dir name (`\x1b[31m‮\x07`) is printed escaped. Hostile
+  filenames in the dir (`a\x1b[31m.json`, `b‮.json`, `Upper.json`) fail `NAME_PATTERN` and are
+  never printed. No resolved absolute path appears in any error.
+- **Extensions.** No config key loads an extension (`extensions`/`report_extensions` are unknown
+  keys and give exit 2). A template's `requires_extensions` fails closed ("not loaded").
+- **`report_include_run_meta`.** A repo can turn it on, but it adds only `uuid4().hex` and a UTC
+  timestamp: no hostname, user, MAC (not uuid1) or path. None of the 5 packaged templates reads
+  `run.id`/`run.generated_at`, so packaged output stays byte-deterministic with the key on. Only a
+  repo-authored template can emit the values, and the repo already controls its own report.
+- **[LOW] C1 Directory listing is unbounded in entries scanned (CWE-400).**
+  `MAX_DIRECTORY_TEMPLATES` counts only matching `<name>.json` entries. `available_templates`
+  (`telemetry/loader.py`, scandir loop) still walks every entry, on every `scan` that sets
+  `report_templates_dir`, even with a packaged `--format`. Impact: a huge directory slows only
+  that repo's own scans. Mitigation (follow-up, python-expert): cap total entries visited, or
+  list the directory only when the name is not packaged.
+- **[INFO]** A missing or unlistable `report_templates_dir` also breaks packaged formats (exit 2).
+  This fails closed and is acceptable.
+- **[INFO]** A missing in-root dir whose name has control characters is reported as "escapes the
+  scan root". The wording is misleading, but nothing leaks.
+
+### Task 02 verdict: PASS
+No CRITICAL/HIGH/MEDIUM. C1 is a LOW follow-up. R4/R8/R9 are unchanged.

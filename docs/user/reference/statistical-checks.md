@@ -211,13 +211,13 @@ it if you want even stub documents scored; the minimum allowed value is 1.
 ### What a Finding Looks Like
 
 ```text
-warning: docs/guide.md: Readability grade level 18.3 exceeds threshold 14.0
+  warning: docs/guide.md: Readability grade level 18.3 exceeds threshold 14.0
 ```
 
 The format is:
 
 ```text
-warning: <path>: Readability grade level <actual> exceeds threshold <configured>
+  warning: <path>: Readability grade level <actual> exceeds threshold <configured>
 ```
 
 Both values are rounded to one decimal place.
@@ -237,10 +237,9 @@ $ uv run docsentinel scan /path/to/dir --profile standard --format text
 ```text
 Schema version: 1
 Profile: standard
-Documents: 1
+Documents: 1 (0 with problems)
 Enabled rules: ["DS201", "DS202", "DS203", "DS204"]
 4 standard rule(s) evaluated.
-  short_doc.md (322 bytes)
 ```
 
 No findings. The document has fewer than 50 prose words.
@@ -256,11 +255,11 @@ max_grade_level = 10.0
 ```text
 Schema version: 1
 Profile: standard
-Documents: 1
+Documents: 1 (1 with problems)
 Enabled rules: ["DS201", "DS202", "DS203", "DS204"]
 4 standard rule(s) evaluated.
-  short_doc.md (322 bytes)
-warning: short_doc.md: Readability grade level 30.8 exceeds threshold 10.0
+short_doc.md (322 bytes)
+  warning: short_doc.md: Readability grade level 30.8 exceeds threshold 10.0
 ```
 
 The same document is now scored and flagged.
@@ -270,11 +269,11 @@ The same document is now scored and flagged.
 ```text
 Schema version: 1
 Profile: standard
-Documents: 1
+Documents: 1 (1 with problems)
 Enabled rules: ["DS201", "DS202", "DS203", "DS204"]
 4 standard rule(s) evaluated.
-  complex.md (765 bytes)
-warning: complex.md: Readability grade level 27.3 exceeds threshold 14.0
+complex.md (765 bytes)
+  warning: complex.md: Readability grade level 27.3 exceeds threshold 14.0
 ```
 
 **Same document cleared by raising `max_grade_level = 20.0`:**
@@ -282,11 +281,11 @@ warning: complex.md: Readability grade level 27.3 exceeds threshold 14.0
 ```text
 Schema version: 1
 Profile: standard
-Documents: 1
+Documents: 1 (1 with problems)
 Enabled rules: ["DS201", "DS202", "DS203", "DS204"]
 4 standard rule(s) evaluated.
-  complex.md (765 bytes)
-warning: complex.md: Readability grade level 27.3 exceeds threshold 20.0
+complex.md (765 bytes)
+  warning: complex.md: Readability grade level 27.3 exceeds threshold 20.0
 ```
 
 The finding still appears because the grade (27.3) still exceeds 20.0. Setting
@@ -341,13 +340,13 @@ rather than raising the threshold so high that real duplicates are missed.
 ### What a Finding Looks Like
 
 ```text
-warning: docs/guide.md: near-duplicate of docs/install.md#chunk0 (cosine 1.00): 'Install the application by running the setup script and foll'
+  warning: docs/guide.md: near-duplicate of docs/install.md#chunk0 (cosine 1.00): 'Install the application by running the setup script and foll'
 ```
 
 The format is:
 
 ```text
-warning: <later_path>: near-duplicate of <earlier_path>#chunk<index> (cosine <similarity>): '<preview>'
+  warning: <later_path>: near-duplicate of <earlier_path>#chunk<index> (cosine <similarity>): '<preview>'
 ```
 
 `<preview>` is the first 60 characters of the later paragraph (after stripping).
@@ -359,13 +358,12 @@ Two documents containing the same paragraph at the default threshold (0.85):
 ```text
 Schema version: 1
 Profile: standard
-Documents: 2
+Documents: 2 (1 with problems)
 Enabled rules: ["DS201", "DS202", "DS203", "DS204"]
 4 standard rule(s) evaluated.
-  doc_a.md (357 bytes)
-  doc_b.md (357 bytes)
-warning: doc_b.md: near-duplicate of doc_a.md#chunk0 (cosine 1.00): 'Install the application by running the setup script and foll'
-warning: doc_b.md: near-duplicate of doc_a.md#chunk1 (cosine 1.00): 'You need Python 3.10 or later and at least 4 GB of RAM for t'
+doc_b.md (357 bytes)
+  warning: doc_b.md: near-duplicate of doc_a.md#chunk0 (cosine 1.00): 'Install the application by running the setup script and foll'
+  warning: doc_b.md: near-duplicate of doc_a.md#chunk1 (cosine 1.00): 'You need Python 3.10 or later and at least 4 GB of RAM for t'
 ```
 
 **Short paragraph ignored at defaults, then captured after lowering the floors:**
@@ -383,8 +381,8 @@ min_paragraph_chars = 0
 ```
 
 ```text
-warning: doc_b.md: near-duplicate of doc_a.md#chunk0 (cosine 1.00): 'This is a short note.'
-warning: doc_b.md: near-duplicate of doc_a.md#chunk1 (cosine 1.00): 'Configure the application by editing the settings file locat'
+  warning: doc_b.md: near-duplicate of doc_a.md#chunk0 (cosine 1.00): 'This is a short note.'
+  warning: doc_b.md: near-duplicate of doc_a.md#chunk1 (cosine 1.00): 'Configure the application by editing the settings file locat'
 ```
 
 The short paragraph is now in the corpus and the duplicate is reported.
@@ -442,13 +440,13 @@ threshold globally.
 ### What a Finding Looks Like
 
 ```text
-warning: docs/notes.md: low-information paragraph (score 0.00 < 0.15): 'The the the the the the the the the the the the the the the '
+  warning: docs/notes.md: low-information paragraph (score 0.00 < 0.15): 'The the the the the the the the the the the the the the the '
 ```
 
 The format is:
 
 ```text
-warning: <path>: low-information paragraph (score <actual> < <threshold>): '<preview>'
+  warning: <path>: low-information paragraph (score <actual> < <threshold>): '<preview>'
 ```
 
 Both score values are rounded to two decimal places. `<preview>` is the first
@@ -464,13 +462,12 @@ substantive content:
 ```text
 Schema version: 1
 Profile: standard
-Documents: 2
+Documents: 2 (1 with problems)
 Enabled rules: ["DS201", "DS202", "DS203", "DS204"]
 4 standard rule(s) evaluated.
-  real.md (490 bytes)
-  trivial.md (182 bytes)
-warning: trivial.md: low-information paragraph (score 0.00 < 0.15): 'The the the the the the the the the the the the the the the '
-warning: trivial.md: low-information paragraph (score 0.00 < 0.15): 'Is is is is is is is is is is is is is is is is is is is is '
+trivial.md (182 bytes)
+  warning: trivial.md: low-information paragraph (score 0.00 < 0.15): 'The the the the the the the the the the the the the the the '
+  warning: trivial.md: low-information paragraph (score 0.00 < 0.15): 'Is is is is is is is is is is is is is is is is is is is is '
 ```
 
 **Same documents with `min_information_score = 0.0` — all findings suppressed:**
@@ -483,11 +480,9 @@ min_information_score = 0.0
 ```text
 Schema version: 1
 Profile: standard
-Documents: 2
+Documents: 2 (0 with problems)
 Enabled rules: ["DS201", "DS202", "DS203", "DS204"]
 4 standard rule(s) evaluated.
-  real.md (490 bytes)
-  trivial.md (182 bytes)
 ```
 
 No findings. Setting `min_information_score = 0.0` means no score is strictly

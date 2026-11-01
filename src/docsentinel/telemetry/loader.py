@@ -133,6 +133,11 @@ DEFAULT_TEMPLATE: Final[str] = "text"
 #: a directory holding more fails closed instead of being listed partially.
 MAX_DIRECTORY_TEMPLATES: Final[int] = 1024
 
+#: Most directory entries of any kind :func:`available_templates` visits in
+#: ``report_templates_dir``; a larger directory fails closed instead of being walked
+#: in full on every scan (CWE-400).
+MAX_DIRECTORY_ENTRIES: Final[int] = 4096
+
 #: Recognised ``output.sink`` values of a ``text`` template (M5).
 SINK_TERMINAL: Final[str] = "terminal"
 SINK_GITHUB: Final[str] = "github"
@@ -1788,13 +1793,16 @@ def available_templates(root: Optional[Path] = None, templates_dir: Optional[str
     following symlinks; only regular ``<name>.json`` files with a valid name count,
     and a name already packaged is not repeated (packaged names cannot be shadowed).
     Files are not opened or validated here; a selected template is validated when
-    loaded.
+    loaded. At most :data:`MAX_DIRECTORY_ENTRIES` entries of any kind are visited,
+    so a directory crowded with non-template files cannot make every scan walk it
+    in full.
 
     :param root: The scan root, required for ``templates_dir``.
     :param templates_dir: The configured ``report_templates_dir``, or ``None``.
     :returns: The sorted, de-duplicated template names.
     :raises TemplateError: When ``templates_dir`` is not a string, escapes the root,
-        cannot be listed, or holds more than :data:`MAX_DIRECTORY_TEMPLATES` templates.
+        cannot be listed, holds more than :data:`MAX_DIRECTORY_TEMPLATES` templates,
+        or holds more than :data:`MAX_DIRECTORY_ENTRIES` entries.
     """
     packaged = packaged_template_names()
     if not templates_dir:
@@ -1808,7 +1816,9 @@ def available_templates(root: Optional[Path] = None, templates_dir: Optional[str
     found: set[str] = set()
     try:
         with os.scandir(canonical / templates_dir) as entries:
-            for entry in entries:
+            for visited, entry in enumerate(entries, start=1):
+                if visited > MAX_DIRECTORY_ENTRIES:
+                    raise TemplateError(f"report_templates_dir holds more than {MAX_DIRECTORY_ENTRIES} entries")
                 stem, suffix = os.path.splitext(entry.name)
                 if suffix != ".json" or not _is_template_name(stem) or not entry.is_file(follow_symlinks=False):
                     continue

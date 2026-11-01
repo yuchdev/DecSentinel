@@ -10,6 +10,10 @@ For the standard-profile statistical keys (`max_grade_level`,
 `min_document_words`, `min_paragraph_words`, `min_paragraph_chars`),
 see [Statistical Checks](statistical-checks.md).
 
+For the report options (`report_templates_dir`, `report_show_clean_documents`,
+`report_include_run_meta`), see
+[Report Formats](../tutorial/report.md#report-options).
+
 ## How to set options
 
 Options are set in the same places as all other DocSentinel keys:

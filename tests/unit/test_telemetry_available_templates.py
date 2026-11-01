@@ -172,3 +172,57 @@ def test_load_named_template_resolves_packaged_and_directory_names(tmp_path: Pat
 
     assert load_named_template("text", root=tmp_path, templates_dir="templates").origin == "packaged"
     assert load_named_template("mini", root=tmp_path, templates_dir="templates").origin == "directory"
+
+
+def test_directory_with_thousands_of_non_template_files_fails_closed(tmp_path: Path):
+    """
+    [Unit] available templates: verifies the total-entry cap bounds the listing walk (CWE-400).
+
+    Scenario:
+        Given a templates directory holding one template and ``MAX_DIRECTORY_ENTRIES`` non-template files
+        When the available templates are listed
+        Then ``TemplateError`` names the entry cap instead of the whole directory being walked.
+
+    Boundaries:
+        - Focus: ``MAX_DIRECTORY_ENTRIES`` at its real default value
+        - Fixtures/params: tmp_path with thousands of empty ``.txt`` files
+        - Scope: ``available_templates``
+
+    On failure, first check:
+        - The entry counter inside the ``os.scandir`` loop
+    """
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (templates / "mini.json").write_text(_MINI, encoding="utf-8")
+    for index in range(loader.MAX_DIRECTORY_ENTRIES):
+        (templates / f"note-{index}.txt").touch()
+
+    with pytest.raises(TemplateError, match=f"more than {loader.MAX_DIRECTORY_ENTRIES} entries"):
+        available_templates(tmp_path, "templates")
+
+
+def test_directory_at_the_entry_cap_is_listed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """
+    [Unit] available templates: verifies a directory holding exactly the entry cap is still listed.
+
+    Scenario:
+        Given a lowered cap of three entries and a directory holding one template and two other files
+        When the available templates are listed
+        Then the template is added and no error is raised.
+
+    Boundaries:
+        - Focus: the inclusive boundary of ``MAX_DIRECTORY_ENTRIES``
+        - Fixtures/params: monkeypatched cap, tmp_path
+        - Scope: ``available_templates``
+
+    On failure, first check:
+        - An off-by-one in the entry counter (``enumerate(..., start=1)`` and ``>``)
+    """
+    monkeypatch.setattr(loader, "MAX_DIRECTORY_ENTRIES", 3)
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (templates / "mini.json").write_text(_MINI, encoding="utf-8")
+    (templates / "a.txt").touch()
+    (templates / "b.txt").touch()
+
+    assert "mini" in available_templates(tmp_path, "templates")
