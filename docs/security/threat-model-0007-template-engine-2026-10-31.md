@@ -646,3 +646,47 @@ Closed:
   shape), so the cost stays negligible.
 - **Verdict: PASS_WITH_FOLLOWUP.** There are no CRITICAL or HIGH findings. Story 02.0 may merge.
   R4 stays tracked, R6/R7 are closed, R8 is a follow-up and R9 is accepted.
+
+## Story 03.0 Task 01 review: five packaged templates (security-auditor, 2026-11-01, at 878c1ae)
+Scope: `telemetry/templates/{text,github,json,json-v1,json-documents}.json`, `RULE_TITLES` /
+`rule_title()` in `telemetry/classify.py`, and the `type`/`rule_title`/`inventory` changes in
+`telemetry/model.py` (commits d7c88a7..878c1ae).
+
+- **Sink mapping.** Every UNTRUSTED variable ends in its sink filter:
+  - text: `doc.path`, `p.message` and `reason` (`pending`) go through `neutralize`;
+  - github: `doc.path` goes through `gha_property` and `p.message` through `gha_data`;
+  - json templates: `path`, `message`, `value` and `document_path` are emitted as `$var`
+    with `ensure_ascii: true`.
+  `value` and `type` are not used by the text or github templates.
+- **github.json** emits only well-formed V2 lines. Each line has a literal `::error`/`::warning`,
+  a literal second `::`, and the property list
+  `file=`/`line=`/`col=`/`title=` (all `gha_property`). This meets T2-R1. A `##[` or `::` from
+  hostile data appears only percent-encoded inside a property, or after the second `::`. The
+  only changes from the legacy sink are the added `title=` property and per-document ordering.
+  Neutralization is byte-identical to `reporting` (hostile_controls goldens).
+- **Trust tags.** `notice` (TRUSTED) is assembled in `engine.evaluated_notice` from registry
+  codes and `Rule.opt_in_option` names, or from constant strings. It contains no scanned data.
+  `pending` holds constants but is tagged UNTRUSTED and neutralized anyway. `RULE_TITLES` is a
+  static table of 21 `DS\d{3}` -> `[A-Za-z0-9 ./-]+` literals (verified). `type` comes from
+  detector literals (`DS101`/`DS102`/`DS103`) or from `rule_title()`, which falls back to a
+  runtime-registered rule title (code trust) or `None`. Neither field can carry scanned content.
+  If a library caller injects ESC/CR/LF into `notice`, the text template refuses it with
+  `TemplateError` (fail-closed backstop).
+- **Probe.** The probe rendered 14 hostile results x strict/non-strict x 5 templates (140 renders):
+  - inputs: CR/LF, ESC/OSC, U+202E/U+2066/ZW/BOM, `::stop-commands::`, `::add-mask::`,
+    `##[` at the line start and after LF/CR, lone surrogates, NEL/LS/PS, pre-encoded `%0A`,
+    100k-char strings, the deep profile, the hostile_controls fixture, and an unknown rule
+    `DS999` outside the inventory.
+  - results: no raw Cc/Cf-bidi/ZW/surrogate code point in text or github output, no line in
+    github output that is not a command, and every json output parses and is pure ASCII. Each
+    render took under 5 s, with no cap hit.
+  - The existing template and model tests pass (94).
+- **[INFO]** `RULE_TITLES` is a `Final`-annotated but mutable `dict`. A `MappingProxyType` would
+  make it tamper-evident. This is defense in depth only: it can only be mutated in-process,
+  which is code trust.
+- **[INFO]** Lone surrogates are emitted as `\udXXX` escapes under `ensure_ascii`, as in
+  schema 1. Strict non-Python JSON consumers may reject them.
+
+### Task 01 verdict: PASS
+No CRITICAL/HIGH/MEDIUM. The open items are unchanged: R4 is tracked, R8 is a follow-up and R9
+is accepted.
