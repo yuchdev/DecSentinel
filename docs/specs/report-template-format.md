@@ -136,6 +136,12 @@ Operators: `eq`, `ne`, `in`, `gt`, `lt`, `truthy`, `falsy`.
 }
 ```
 
+The `Documents:` header counts inventory documents only (`documents_count`,
+`documents_with_problems_count`; see Section 6), matching the legacy `Documents: N`
+line. A finding on a path outside the inventory (for example a `DS204` Python
+source) is still listed under its own document line, without a byte size, but is
+not counted in the header.
+
 ## 5. `json` templates
 
 ```json
@@ -191,7 +197,10 @@ needed (and none is applied, preserving JSON v1 behaviour).
 ```
 
 Clean documents are **included** with `"problems": []`: the denominator is what
-turns a fault count into a fault *rate*. The bare list-of-documents shape from the
+turns a fault count into a fault *rate*. `summary.documents` and
+`summary.documents_with_problems` count inventory documents only; a document entry
+appended for an out-of-inventory finding path (`bytes: null`) is listed in
+`documents` but not counted. The bare list-of-documents shape from the
 original request ships as the example template `json-documents.json`.
 
 ## 6. Context schema
@@ -207,7 +216,8 @@ The loader validates every reference against this schema. Each variable carries 
 | `report_schema_version` | int (template's declared schema) | trusted |
 | `profile` | str | trusted |
 | `enabled_rules` | list[str] | trusted |
-| `documents_count`, `documents_with_problems_count`, `findings_count` | int | trusted |
+| `documents_count`, `documents_with_problems_count` | int: inventory documents only (`len(inventory)` and the inventory documents with at least one problem); a path outside the inventory that `documents` appends is never counted, so the counts are the fault-rate denominator and match the legacy `Documents: N` | trusted |
+| `findings_count` | int (every finding, including those on out-of-inventory paths) | trusted |
 | `rules_evaluated` | int | trusted |
 | `rules_type` | str (the profile name) | trusted |
 | `opt_in_off` | list[{`code`, `option`}] | trusted |
@@ -231,7 +241,7 @@ The loader validates every reference against this schema. Each variable carries 
 | Variable | Notes | Trust |
 |---|---|---|
 | `rule`, `rule_title`, `severity`, `line`, `column`, `fault_class`, `tier`, `outcome` | `column`/`line` may be null | trusted |
-| `type` | short category (`dangling link`); null if the detector gave none | trusted |
+| `type` | short category (`dangling link`); when the detector gave none, the rule title with a lower-cased first letter, taken from a static table so it never depends on which profiles were loaded; null for an unknown rule | trusted |
 | `message` | full detector message | **untrusted** |
 | `value` | offending token (target path, name); null if not extracted | **untrusted** |
 | `document_path` | repeated for flat `findings` | **untrusted** |

@@ -40,6 +40,36 @@ FAULT_CLASSES: Final[dict[str, str]] = {
     "DS301": "contradiction_candidate",
 }
 
+#: Rule code -> registered rule title for every shipped rule. The standard
+#: (``DS2xx``) rules register their metadata only when
+#: :func:`~docsentinel.detectors.loader.ensure_standard_loaded` imports their
+#: heavy dependencies, so reading titles from ``RULES`` would make a report depend
+#: on load state. This static copy keeps reports deterministic without importing
+#: scikit-learn/spaCy; a test pins it to the registry once every profile is loaded.
+RULE_TITLES: Final[dict[str, str]] = {
+    "DS101": "Dangling link or anchor",
+    "DS102": "Stray HTML comment",
+    "DS103": "Unresolvable path-like code span",
+    "DS104": "Conflicting heading and explicit anchors",
+    "DS105": "Heading hierarchy and section levels",
+    "DS106": "Empty or contentless sections",
+    "DS108": "Reference-style link definition integrity",
+    "DS109": "Malformed or unclosed fenced code blocks",
+    "DS110": "Missing language labels on code fences",
+    "DS112": "Declared documentation navigation integrity",
+    "DS113": "Missing local media and document assets",
+    "DS114": "Duplicate stable document identifiers",
+    "DS115": "Deprecated names and migrated references",
+    "DS116": "Path traversal outside documentation root",
+    "DS117": "Malformed GFM pipe-table structure",
+    "DS118": "Documentation file and directory naming policy",
+    "DS201": "High text complexity",
+    "DS202": "Duplicated text or facts",
+    "DS203": "Low-information content",
+    "DS204": "Docstring/signature mismatch",
+    "DS301": "Fact-contradiction candidate",
+}
+
 #: Fallback class for a rule with no ``fault_classes.md`` row (a review failure).
 UNMAPPED_FAULT_CLASS: Final[str] = "unmapped"
 
@@ -71,6 +101,20 @@ def tier_for_profile(profile: str) -> str:
     :returns: ``heuristic`` for ``deep``, otherwise ``deterministic``.
     """
     return "heuristic" if profile == "deep" else "deterministic"
+
+
+def rule_title(code: str) -> Optional[str]:
+    """Return a rule's title independently of which detector profiles are loaded.
+
+    :param code: The rule code, for example ``DS201``.
+    :returns: The title from :data:`RULE_TITLES` for a shipped rule, else the title of
+        a rule registered at runtime, else ``None`` for an unknown code.
+    """
+    title = RULE_TITLES.get(code)
+    if title is not None:
+        return title
+    rule = RULES.get(code)
+    return rule.title if rule is not None and rule.title else None
 
 
 def classify(finding: Finding, config: Config, *, strict: bool = False) -> Classification:

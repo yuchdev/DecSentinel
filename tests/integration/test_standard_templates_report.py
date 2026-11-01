@@ -6,20 +6,20 @@ byte-for-byte with ``expected.template-<name>``; ``json-v1`` is compared with th
 pre-move snapshot ``expected.json`` itself (and with the legacy ``render(result, "json")``). The
 cases are built from stored input, never a live scan, so detector wording cannot move the goldens.
 
-Problem ``type`` falls back to the rule title, and the ``DS2xx`` titles are registered only when the
-standard detectors load. The schema-2 JSON goldens therefore load them first, so the bytes do not
-depend on test order.
+Problem ``type`` falls back to the rule title from the static ``RULE_TITLES`` table, so the bytes do
+not depend on whether the lazily loaded ``DS2xx`` detectors ran; a subprocess test proves it.
 """
 
 import json
 import re
+import subprocess
+import sys
+import textwrap
 from collections.abc import Callable
 
 import pytest
 
 from docsentinel.config import Config
-from docsentinel.detectors.loader import ensure_standard_loaded
-from docsentinel.errors import ExtraNotInstalledError
 from docsentinel.models import Document, Finding, ScanResult
 from docsentinel.reporting import render
 from docsentinel.telemetry import engine as engine_module
@@ -102,15 +102,6 @@ def _render(result: ScanResult, name: str, **build_options: object) -> str:
     return render_template(load_template(name), ReportModel.build(result, Config(), **build_options))
 
 
-@pytest.fixture
-def standard_titles():
-    """Register the ``DS2xx`` rule titles so a derived problem ``type`` is order-independent."""
-    try:
-        ensure_standard_loaded()
-    except ExtraNotInstalledError:
-        pytest.skip("docsentinel[standard] is not installed; DS2xx rule titles are unavailable")
-
-
 @pytest.mark.parametrize("name", _PACKAGED)
 def test_packaged_template_loads_by_name(name: str):
     """
@@ -172,7 +163,6 @@ def test_template_matches_golden(
     case_name: str,
     name: str,
     asset_case: Callable[[str, str], AssetCase],
-    standard_titles: None,
 ):
     """
     [Integration] standard templates report: verifies each packaged template matches its golden output.
@@ -184,12 +174,12 @@ def test_template_matches_golden(
 
     Boundaries:
         - Focus: the intended Story 03.0 report shapes
-        - Fixtures/params: five cases by four templates; DS2xx titles registered first
+        - Fixtures/params: five cases by four templates; DS2xx detectors deliberately not loaded
         - Scope: rendering only
 
     On failure, first check:
         - Whether a template change was intended; if so the golden needs a deliberate, reviewed update
-        - Whether the DS2xx titles changed (they feed the derived problem ``type``)
+        - Whether ``RULE_TITLES`` changed (it feeds the derived problem ``type``)
     """
     case = asset_case(_ASSET_GROUP, case_name)
 
@@ -298,7 +288,6 @@ def test_github_template_routes_levels_and_location(asset_case: Callable[[str, s
 def test_json_schema2_round_trips_with_ten_key_problems(
     case_name: str,
     asset_case: Callable[[str, str], AssetCase],
-    standard_titles: None,
 ):
     """
     [Integration] standard templates report: verifies the schema-2 json shape and the bare-list example.
@@ -425,3 +414,113 @@ def test_templates_render_a_large_report_within_the_step_budget(name: str, monke
 
     assert rendered
     assert 0 < peak["steps"] < MAX_STEPS // 10
+
+
+#: Probe run in a fresh isolated interpreter: render the stored result with every golden template
+#: before and after loading the standard detectors, and report both renderings as JSON.
+_LOAD_STATE_PROBE: str = """
+    import json, pathlib, sys
+    from docsentinel.config import Config
+    from docsentinel.errors import ExtraNotInstalledError
+    from docsentinel.models import Document, Finding, ScanResult
+    from docsentinel.telemetry.engine import render_template
+    from docsentinel.telemetry.loader import load_template
+    from docsentinel.telemetry.model import ReportModel
+
+    data = json.loads(pathlib.Path(sys.argv[1]).read_bytes().decode("utf-8"))
+    result = ScanResult(
+        schema_version=data["schema_version"],
+        profile=data["profile"],
+        documents=tuple(Document(**document) for document in data["documents"]),
+        findings=tuple(Finding(**finding) for finding in data["findings"]),
+        enabled_rules=tuple(data["enabled_rules"]),
+        pending=tuple(data["pending"]),
+        notice=data["notice"],
+        rules_evaluated=data.get("rules_evaluated", 0),
+        opt_in_off=tuple((code, option) for code, option in data.get("opt_in_off", ())),
+    )
+    names = ("text", "github", "json", "json-documents")
+
+    def render_all():
+        return {name: render_template(load_template(name), ReportModel.build(result, Config())) for name in names}
+
+    preloaded = "docsentinel.detectors.standard" in sys.modules
+    before = render_all()
+    try:
+        from docsentinel.detectors.loader import ensure_standard_loaded
+        ensure_standard_loaded()
+        after = render_all()
+    except ExtraNotInstalledError:
+        after = None
+    print(json.dumps({"preloaded": preloaded, "before": before, "after": after}))
+"""
+
+
+def test_problem_type_is_independent_of_standard_load_state(asset_case: Callable[[str, str], AssetCase]):
+    """
+    [Integration] standard templates report: verifies DS2xx output is identical before and after the lazy load.
+
+    Scenario:
+        Given the standard case (DS201-DS204 findings without a detector ``type``)
+        When a fresh interpreter renders it with each golden template, then loads the standard
+        detectors and renders it again
+        Then the standard package was not loaded for the first rendering, both renderings are
+        identical, and both equal the checked-in goldens.
+
+    Boundaries:
+        - Focus: regression for the order-dependent ``type``/``rule_title`` of lazily registered rules
+        - Fixtures/params: the standard case; one isolated subprocess, so no earlier import can mask it
+        - Scope: rendering only; skips the after-load half when ``docsentinel[standard]`` is missing
+
+    On failure, first check:
+        - ``RULE_TITLES`` and ``rule_title`` in ``telemetry/classify.py``
+        - Whether ``telemetry/model.py`` started reading titles from ``RULES`` again
+    """
+    case = asset_case(_ASSET_GROUP, "standard")
+    completed = subprocess.run(
+        [sys.executable, "-I", "-c", textwrap.dedent(_LOAD_STATE_PROBE), str(case.path("result.json"))],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    report = json.loads(completed.stdout)
+
+    assert report["preloaded"] is False
+    for name, rendered in report["before"].items():
+        assert rendered == _read_exact(case, f"expected.template-{name}"), name
+    if report["after"] is None:
+        pytest.skip("docsentinel[standard] is not installed; only the unloaded rendering was checked")
+    assert report["after"] == report["before"]
+
+
+def test_header_counts_inventory_documents_only(asset_case: Callable[[str, str], AssetCase]):
+    """
+    [Integration] standard templates report: verifies document counts exclude out-of-inventory finding paths.
+
+    Scenario:
+        Given the standard case with two inventory documents and a DS204 finding on ``src/calc.py``
+        When it is rendered with the text and json templates
+        Then the text header reads ``Documents: 2 (2 with problems)`` like the legacy ``Documents: 2``,
+        the json summary counts 2 and 2, and ``src/calc.py`` is still listed with its finding.
+
+    Boundaries:
+        - Focus: regression for the header counting the appended out-of-inventory document
+        - Fixtures/params: the standard case
+        - Scope: rendering only
+
+    On failure, first check:
+        - ``documents_count``/``documents_with_problems_count`` in ``ReportModel.build``
+    """
+    case = asset_case(_ASSET_GROUP, "standard")
+    result = _load_result(case)
+
+    text = _render(result, "text").split("\n")
+    report = json.loads(_render(result, "json"))
+
+    assert text[2] == "Documents: 2 (2 with problems)"
+    assert _read_exact(case, "expected.txt").split("\n")[2] == f"Documents: {len(result.documents)}"
+    assert "src/calc.py" in text
+    assert report["summary"]["documents"] == 2
+    assert report["summary"]["documents_with_problems"] == 2
+    assert [entry["path"] for entry in report["documents"]] == ["docs/a.md", "docs/b.md", "src/calc.py"]
+    assert report["documents"][-1]["bytes"] is None and len(report["documents"][-1]["problems"]) == 1

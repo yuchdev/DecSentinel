@@ -1,6 +1,6 @@
 Schema version: 1
 Profile: standard
-Documents: 3 (3 with problems)
+Documents: 2 (2 with problems)
 Enabled rules: ["DS201", "DS202", "DS203", "DS204"]
 4 standard rule(s) evaluated.
 docs/a.md (1024 bytes)

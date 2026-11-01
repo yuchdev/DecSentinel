@@ -21,8 +21,7 @@ from typing import Any, Final, Optional
 
 from docsentinel.config import Config
 from docsentinel.models import Finding, ScanResult
-from docsentinel.rules import RULES
-from docsentinel.telemetry.classify import classify
+from docsentinel.telemetry.classify import classify, rule_title
 from docsentinel.telemetry.events import utc_now_iso
 
 #: Deep-profile advisory banner, carried as data in the ``advisory`` variable.
@@ -162,16 +161,19 @@ def _sorted_counts(values: Sequence[str]) -> dict[str, int]:
 def _derived_type(finding: Finding) -> Optional[str]:
     """Return the finding's short category, deriving it from the rule title when unset.
 
+    The title comes from :func:`~docsentinel.telemetry.classify.rule_title`, so the
+    result does not depend on whether the lazily loaded standard detectors ran.
+
     :param finding: The reported finding.
     :returns: ``finding.type``, else the rule title with a lower-cased first letter,
-        else ``None`` for an unregistered rule.
+        else ``None`` for an unknown rule.
     """
     if finding.type is not None:
         return finding.type
-    rule = RULES.get(finding.rule)
-    if rule is None or not rule.title:
+    title = rule_title(finding.rule)
+    if title is None:
         return None
-    return rule.title[0].lower() + rule.title[1:]
+    return title[0].lower() + title[1:]
 
 
 def _problem(finding: Finding, config: Config, *, strict: bool) -> dict[str, JsonValue]:
@@ -183,10 +185,9 @@ def _problem(finding: Finding, config: Config, *, strict: bool) -> dict[str, Jso
     :returns: The JSON-shaped problem mapping.
     """
     labels = classify(finding, config, strict=strict)
-    rule = RULES.get(finding.rule)
     return {
         "rule": finding.rule,
-        "rule_title": rule.title if rule is not None else None,
+        "rule_title": rule_title(finding.rule),
         "type": _derived_type(finding),
         "message": finding.message,
         "value": finding.value,
@@ -219,6 +220,9 @@ class ReportModel:
         ``problems`` attached by path (``[]`` for a clean document); a finding whose
         path is not in the inventory gets an appended document entry with
         ``bytes = None`` so no finding is ever dropped from a document-grouped report.
+        ``documents_count`` and ``documents_with_problems_count`` count inventory
+        documents only (the fault-rate denominator and the legacy ``Documents: N``),
+        so an appended out-of-inventory entry is listed but never counted.
         Problems keep the order of ``result.findings``. ``inventory`` repeats
         ``result.documents`` verbatim as ``{path, bytes}`` records, so the schema-1
         ``json-v1`` template can reproduce the legacy ``documents`` list exactly.
@@ -259,13 +263,14 @@ class ReportModel:
 
         document_list = list(documents.values())
         with_problems = [entry for entry in document_list if entry["problems"]]
+        inventory_paths = {document.path for document in result.documents}
         context: dict[str, JsonValue] = {
             "schema_version": result.schema_version,
             "report_schema_version": report_schema_version,
             "profile": result.profile,
             "enabled_rules": list(result.enabled_rules),
-            "documents_count": len(document_list),
-            "documents_with_problems_count": len(with_problems),
+            "documents_count": len(result.documents),
+            "documents_with_problems_count": sum(1 for entry in with_problems if entry["path"] in inventory_paths),
             "findings_count": len(result.findings),
             "rules_evaluated": result.rules_evaluated,
             "rules_type": result.profile,

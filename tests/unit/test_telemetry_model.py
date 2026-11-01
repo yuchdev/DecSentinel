@@ -9,7 +9,8 @@ import pytest
 
 from docsentinel.config import Config
 from docsentinel.models import Document, Finding, ScanResult
-from docsentinel.telemetry.classify import DEFAULT_DOMAIN, UNMAPPED_FAULT_CLASS, classify
+from docsentinel.rules import Rule
+from docsentinel.telemetry.classify import DEFAULT_DOMAIN, RULE_TITLES, UNMAPPED_FAULT_CLASS, classify, rule_title
 from docsentinel.telemetry.model import (
     ADVISORY_BANNER,
     CONTEXT_SCHEMA,
@@ -306,6 +307,114 @@ def test_finding_outside_inventory_gets_a_document_entry():
     assert [doc["path"] for doc in context["documents"]] == ["a.md", "b.md", "c.md", "src/calc.py"]
     assert context["documents"][-1]["bytes"] is None
     assert context["documents"][-1]["problems"][0]["fault_class"] == "contract_mismatch"
+
+
+def test_document_counts_exclude_out_of_inventory_paths():
+    """
+    [Unit] report model: verifies the document counts cover inventory documents only.
+
+    Scenario:
+        Given three inventory documents, a finding on b.md and a finding on ``src/calc.py`` outside it
+        When the model is built
+        Then ``documents_count`` is 3 and ``documents_with_problems_count`` is 1, while both
+        ``documents_with_problems`` entries (including the appended one) are still listed.
+
+    Boundaries:
+        - Focus: regression for the header counting an appended out-of-inventory document
+        - Fixtures/params: none
+        - Scope: in-memory model building
+
+    On failure, first check:
+        - The inventory filter on ``documents_with_problems_count`` in ``ReportModel.build``
+    """
+    orphan = Finding(rule="DS204", path="src/calc.py", message="param mismatch", severity="warning", line=1)
+
+    context = ReportModel.build(_result((_DS102, orphan), profile="standard"), Config(profile="standard"))
+
+    assert context["documents_count"] == 3 == len(context["inventory"])
+    assert context["documents_with_problems_count"] == 1
+    assert [doc["path"] for doc in context["documents_with_problems"]] == ["b.md", "src/calc.py"]
+    assert context["findings_count"] == 2
+
+
+def test_document_counts_when_only_out_of_inventory_paths_have_problems():
+    """
+    [Unit] report model: verifies an inventory with no flagged document counts zero with problems.
+
+    Scenario:
+        Given an empty inventory and one finding on ``src/calc.py``
+        When the model is built
+        Then both document counts are 0 but the appended document and its finding are listed.
+
+    Boundaries:
+        - Focus: edge case of the inventory-only counts (empty inventory)
+        - Fixtures/params: none
+        - Scope: in-memory model building
+
+    On failure, first check:
+        - Whether ``documents_count`` was derived from the grouped ``documents`` list
+    """
+    orphan = Finding(rule="DS204", path="src/calc.py", message="param mismatch", severity="warning", line=1)
+    result = ScanResult(profile="standard", documents=(), findings=(orphan,), enabled_rules=("DS204",), pending=())
+
+    context = ReportModel.build(result, Config(profile="standard"))
+
+    assert context["documents_count"] == 0
+    assert context["documents_with_problems_count"] == 0
+    assert [doc["path"] for doc in context["documents"]] == ["src/calc.py"]
+    assert context["findings_count"] == 1
+
+
+def test_derived_type_does_not_depend_on_the_rule_registry(monkeypatch: pytest.MonkeyPatch):
+    """
+    [Unit] report model: verifies DS2xx ``type``/``rule_title`` come from the static title table.
+
+    Scenario:
+        Given a DS201 finding without a detector ``type`` and a registry without DS201
+        When the model is built
+        Then ``rule_title`` is the shipped title and ``type`` its lower-cased-first form, exactly as
+        when the standard detectors are loaded.
+
+    Boundaries:
+        - Focus: regression for the order-dependent title of lazily registered rules
+        - Fixtures/params: ``RULES`` patched to an empty registry
+        - Scope: in-memory model building
+
+    On failure, first check:
+        - ``RULE_TITLES`` and ``rule_title`` in ``telemetry/classify.py``
+    """
+    monkeypatch.setattr("docsentinel.telemetry.classify.RULES", {})
+    finding = Finding(rule="DS201", path="a.md", message="Grade level 19.2", severity="warning", line=1)
+
+    problem = ReportModel.build(_result((finding,), profile="standard"), Config(profile="standard"))["findings"][0]
+
+    assert problem["rule_title"] == "High text complexity"
+    assert problem["type"] == "high text complexity"
+
+
+def test_rule_title_unknown_and_runtime_registered_codes(monkeypatch: pytest.MonkeyPatch):
+    """
+    [Unit] report model: verifies ``rule_title`` falls back to the registry, then to ``None``.
+
+    Scenario:
+        Given a code absent from ``RULE_TITLES`` that is registered at runtime, and an unknown code
+        When ``rule_title`` is called
+        Then the registered title is returned for the first and ``None`` for the second.
+
+    Boundaries:
+        - Focus: invalid-input and fallback branches of ``rule_title``
+        - Fixtures/params: ``RULES`` patched to hold one synthetic rule
+        - Scope: one function
+
+    On failure, first check:
+        - The ``RULES`` fallback in ``rule_title``
+    """
+    synthetic = Rule(code="DS999", profile="fast", title="Synthetic rule", description="test only")
+    monkeypatch.setattr("docsentinel.telemetry.classify.RULES", {"DS999": synthetic})
+
+    assert "DS999" not in RULE_TITLES
+    assert rule_title("DS999") == "Synthetic rule"
+    assert rule_title("DS000") is None
 
 
 def test_empty_result_has_empty_collections():
