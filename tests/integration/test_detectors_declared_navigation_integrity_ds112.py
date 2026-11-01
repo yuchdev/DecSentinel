@@ -437,7 +437,7 @@ def test_cli_readiness_error_exits_two_without_report_or_absolute_path(
         'profile = "fast"\nnavigation_indexes = ["docs/missing.md"]\n', encoding="utf-8"
     )
 
-    exit_code = cli.main(["scan", str(case.root), "--profile", "fast", "--format", "json"])
+    exit_code = cli.main(["scan", str(case.root), "--profile", "fast", "--format", "json-v1"])
 
     captured = capsys.readouterr()
     assert exit_code == 2
@@ -577,7 +577,7 @@ def test_cli_fast_json_scan_reports_ds112_warning_and_exits_zero(
         'profile = "fast"\nnavigation_indexes = ["README.md"]\n', encoding="utf-8"
     )
 
-    exit_code = cli.main(["scan", str(case.root), "--profile", "fast", "--format", "json"])
+    exit_code = cli.main(["scan", str(case.root), "--profile", "fast", "--format", "json-v1"])
 
     captured = capsys.readouterr()
     payload = json.loads(captured.out)
@@ -1108,7 +1108,7 @@ def test_reports_are_stable_across_formats(asset_case: Callable[[str, str], Asse
     assert render(result, "text") == text
     assert "warning: README.md: navigation target does not exist: docs/missing.md" in text
 
-    payload = json.loads(render(result, "json"))
+    payload = json.loads(render(result, "json-v1"))
     assert payload["schema_version"] == 1
     assert payload["enabled_rules"] == ["DS112"]
     assert payload["findings"][0]["rule"] == "DS112"
@@ -1117,7 +1117,7 @@ def test_reports_are_stable_across_formats(asset_case: Callable[[str, str], Asse
 
     github = render(result, "github")
     assert render(result, "github") == github
-    assert github.startswith("::warning file=README.md,line=5::")
+    assert github.startswith("::warning file=README.md,line=5,title=DS112::")
 
 
 def test_hostile_targets_and_index_are_bounded_and_repr_escaped(tmp_path: Path):

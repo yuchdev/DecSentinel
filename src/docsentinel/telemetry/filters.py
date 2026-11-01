@@ -37,6 +37,9 @@ from typing import Any, Final
 #: Upper bound on a :class:`TemplateError` message after neutralization.
 MAX_MESSAGE: Final[int] = 512
 
+#: Name of the ``json`` filter, the one materializing filter the engine pre-sizes.
+JSON_FILTER: Final[str] = "json"
+
 JsonValue = Any
 
 
@@ -336,7 +339,7 @@ _FUNCTIONS: Final[Mapping[str, Callable[..., JsonValue]]] = MappingProxyType(
         "neutralize": _filter_neutralize,
         "gha_property": _filter_gha_property,
         "gha_data": _filter_gha_data,
-        "json": _filter_json,
+        JSON_FILTER: _filter_json,
         "join": _filter_join,
         "len": _filter_len,
         "lower": _filter_lower,

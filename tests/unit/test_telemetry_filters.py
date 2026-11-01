@@ -1,9 +1,10 @@
 """Unit tests for ``docsentinel.telemetry.filters`` (Milestone 0007 Story 02.0 Task 02).
 
 The neutralization tables and the GitHub escapers were moved here from
-``docsentinel.reporting``; the originals stay in ``reporting.py`` until the Story 03.0
-cut-over, so these tests pin the moved copies byte-identical to them over the full
-code-point range. Non-printable code points are spelled with ``chr()``.
+``docsentinel.reporting``. The Story 03.0 cut-over deleted the originals, so this module
+keeps a frozen reference copy of the pre-move algorithm (``_reference_*``) and pins the
+moved copies byte-identical to it over the full code-point range. Non-printable code
+points are spelled with ``chr()``.
 """
 
 from typing import Any
@@ -33,6 +34,45 @@ LONE_SURROGATE = chr(0xD800)
 _ALL_CODE_POINTS: str = "".join(chr(code_point) for code_point in range(0x110000))
 
 
+def _reference_escape(code_point: int) -> str:
+    """Return the pre-move backslash escape of one code point (frozen copy of the deleted original)."""
+    if code_point <= 0xFF:
+        return f"\\x{code_point:02x}"
+    if code_point <= 0xFFFF:
+        return f"\\u{code_point:04x}"
+    return f"\\U{code_point:08x}"
+
+
+def _reference_table(*, keep_crlf: bool) -> dict[int, str]:
+    """Return the pre-move control table (frozen copy of ``reporting._build_control_table``)."""
+    code_points: set[int] = set(range(0x00, 0x20)) | {0x7F} | set(range(0x80, 0xA0))
+    code_points |= {0x061C, 0x200B, 0x200C, 0x200D, 0x200E, 0x200F, 0xFEFF}
+    code_points |= set(range(0x202A, 0x202F))
+    code_points |= {0x2066, 0x2067, 0x2068, 0x2069}
+    code_points |= {0x2028, 0x2029}
+    code_points |= set(range(0xD800, 0xE000))
+    if keep_crlf:
+        code_points -= {0x0D, 0x0A}
+    return {code_point: _reference_escape(code_point) for code_point in code_points}
+
+
+def _reference_neutralize(value: str, *, keep_crlf: bool = False) -> str:
+    """Return the pre-move ``reporting._neutralize_controls`` output."""
+    return value.translate(_reference_table(keep_crlf=keep_crlf))
+
+
+def _reference_property(value: str) -> str:
+    """Return the pre-move ``reporting._escape_property`` output."""
+    neutral = _reference_neutralize(value, keep_crlf=True)
+    return neutral.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A").replace(":", "%3A").replace(",", "%2C")
+
+
+def _reference_data(value: str) -> str:
+    """Return the pre-move ``reporting._escape_data`` output."""
+    neutral = _reference_neutralize(value, keep_crlf=True)
+    return neutral.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+
+
 def test_filter_names_match_loader_signature_table():
     """
     [Unit] filters: verifies the runtime filter table has exactly the loader's load-time signatures.
@@ -55,10 +95,10 @@ def test_filter_names_match_loader_signature_table():
 
 def test_moved_tables_equal_reporting_originals():
     """
-    [Unit] filters: verifies the moved control tables equal the reporting.py originals entry for entry.
+    [Unit] filters: verifies the moved control tables equal the pre-move originals entry for entry.
 
     Scenario:
-        Given the text and GitHub control tables in ``filters`` and in ``reporting``
+        Given the text and GitHub control tables in ``filters`` and the frozen pre-move reference copy
         When they are compared
         Then both pairs are equal dicts.
 
@@ -68,11 +108,11 @@ def test_moved_tables_equal_reporting_originals():
         - Scope: private module tables
 
     On failure, first check:
-        - ``filters._build_control_table`` drifted from ``reporting._build_control_table``
+        - ``filters._build_control_table`` drifted from the deleted ``reporting._build_control_table``
     """
-    assert filters._TEXT_CONTROL_TABLE == reporting._TEXT_CONTROL_TABLE
-    assert filters._GITHUB_CONTROL_TABLE == reporting._GITHUB_CONTROL_TABLE
-    assert filters._build_control_table(keep_crlf=False) == reporting._build_control_table(keep_crlf=False)
+    assert filters._TEXT_CONTROL_TABLE == _reference_table(keep_crlf=False)
+    assert filters._GITHUB_CONTROL_TABLE == _reference_table(keep_crlf=True)
+    assert filters._build_control_table(keep_crlf=False) == _reference_table(keep_crlf=False)
 
 
 def test_moved_functions_match_originals_over_every_code_point():
@@ -81,7 +121,7 @@ def test_moved_functions_match_originals_over_every_code_point():
 
     Scenario:
         Given one string holding every code point U+0000..U+10FFFF, lone surrogates included
-        When it passes through each moved function and its reporting.py original
+        When it passes through each moved function and the frozen copy of its deleted reporting.py original
         Then the outputs are identical, and ``reporting.neutralize_text`` agrees too.
 
     Boundaries:
@@ -92,10 +132,10 @@ def test_moved_functions_match_originals_over_every_code_point():
     On failure, first check:
         - The ``replace`` chains of ``_escape_property`` / ``_escape_data``
     """
-    assert neutralize(_ALL_CODE_POINTS) == reporting._neutralize_controls(_ALL_CODE_POINTS)
-    assert reporting.neutralize_text(_ALL_CODE_POINTS) == reporting._neutralize_controls(_ALL_CODE_POINTS)
-    assert gha_property(_ALL_CODE_POINTS) == reporting._escape_property(_ALL_CODE_POINTS)
-    assert gha_data(_ALL_CODE_POINTS) == reporting._escape_data(_ALL_CODE_POINTS)
+    assert neutralize(_ALL_CODE_POINTS) == _reference_neutralize(_ALL_CODE_POINTS)
+    assert reporting.neutralize_text(_ALL_CODE_POINTS) == _reference_neutralize(_ALL_CODE_POINTS)
+    assert gha_property(_ALL_CODE_POINTS) == _reference_property(_ALL_CODE_POINTS)
+    assert gha_data(_ALL_CODE_POINTS) == _reference_data(_ALL_CODE_POINTS)
 
 
 @pytest.mark.parametrize(
@@ -128,7 +168,7 @@ def test_neutralize_matches_pre_move_output(raw: str, expected: str):
         - ``filters._escaped`` formatting
     """
     assert neutralize(raw) == expected
-    assert reporting._neutralize_controls(raw) == expected
+    assert _reference_neutralize(raw) == expected
     assert reporting.neutralize_text(raw) == expected
 
 

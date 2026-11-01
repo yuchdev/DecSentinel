@@ -80,6 +80,10 @@ _CONFIG_OPTIONS = {
     "documentation_naming_allow",
     "documentation_naming_directories",
     "documentation_naming_prefix_patterns",
+    # Milestone 0007 Story 03.0 — template-driven reporting.
+    "report_templates_dir",
+    "report_show_clean_documents",
+    "report_include_run_meta",
 }
 # Standalone config file names accepted at the scan root: the preferred name first, then the alias.
 STANDALONE_CONFIG_NAMES = ("docsentinel.toml", "doc_sentinel.toml")
@@ -133,6 +137,8 @@ _BOOL_OPTIONS = (
     "deprecated_check_links",
     "deprecated_case_sensitive",
     "documentation_naming_directories",
+    "report_show_clean_documents",
+    "report_include_run_meta",
 )
 
 # Options holding a list of nonempty, non-path strings.
@@ -247,6 +253,14 @@ class Config:
     :ivar documentation_naming_allow: Exempt file names for ``DS118``.
     :ivar documentation_naming_directories: Whether ``DS118`` checks directories.
     :ivar documentation_naming_prefix_patterns: Validated prefix exceptions.
+    :ivar report_templates_dir: Directory, relative to the scan root, holding extra
+        report templates selectable by name with ``--format``, or ``None``. Validated
+        lexically here; the template loader re-applies the full containment gate
+        (no symlink out of the root) before listing or opening anything in it.
+    :ivar report_show_clean_documents: Whether the text report also lists documents
+        without problems (``--show-clean-documents``).
+    :ivar report_include_run_meta: Whether the report context carries the per-run
+        ``run.generated_at``/``run.id`` values; off keeps reports deterministic.
     """
 
     include: tuple[str, ...] = ("*.md", "**/*.md")
@@ -308,6 +322,9 @@ class Config:
     documentation_naming_allow: tuple[str, ...] = ("README.md", "index.md")
     documentation_naming_directories: bool = True
     documentation_naming_prefix_patterns: tuple[str, ...] = ()
+    report_templates_dir: Optional[str] = None
+    report_show_clean_documents: bool = False
+    report_include_run_meta: bool = False
 
 
 def _require_bool(name: str, value: object) -> bool:
@@ -550,7 +567,7 @@ def load_config(root: Path, path: Optional[Path] = None) -> Config:
 
 
 def _load_extra_options(options: dict[str, object], defaults: Config) -> dict[str, object]:
-    """Validate the Story 02–14 typed options into ``Config`` keyword arguments.
+    """Validate the Story 02–14 and Milestone 0007 typed options into ``Config`` keyword arguments.
 
     :param options: The raw options mapping from the TOML table.
     :param defaults: A default :class:`Config` used to source field defaults.
@@ -606,5 +623,13 @@ def _load_extra_options(options: dict[str, object], defaults: Config) -> dict[st
     if deprecated_file and not _is_within_root(deprecated_file):
         raise ConfigError("deprecated_references_file must stay within the scan root")
     extra["deprecated_references_file"] = deprecated_file
+
+    templates_dir = options.get("report_templates_dir", defaults.report_templates_dir)
+    if templates_dir is not None:
+        if not isinstance(templates_dir, str) or not templates_dir:
+            raise ConfigError("report_templates_dir must be a nonempty directory path under the scan root")
+        if not _is_within_root(templates_dir):
+            raise ConfigError("report_templates_dir must stay within the scan root")
+    extra["report_templates_dir"] = templates_dir
 
     return extra

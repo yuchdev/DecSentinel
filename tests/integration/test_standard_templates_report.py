@@ -3,7 +3,7 @@
 Each case under ``tests/assets/report/<case>/`` stores a serialized ``result.json``. It is rendered
 through ``ReportModel.build`` and the template engine with every packaged template, and compared
 byte-for-byte with ``expected.template-<name>``; ``json-v1`` is compared with the Story 01.0
-pre-move snapshot ``expected.json`` itself (and with the legacy ``render(result, "json")``). The
+pre-move snapshot ``expected.json`` itself (and with the public ``render(result, "json-v1")``). The
 cases are built from stored input, never a live scan, so detector wording cannot move the goldens.
 
 Problem ``type`` falls back to the rule title from the static ``RULE_TITLES`` table, so the bytes do
@@ -137,7 +137,7 @@ def test_json_v1_template_equals_pre_move_snapshot(case_name: str, asset_case: C
     Scenario:
         Given a stored ScanResult per profile, the hostile case and the columns case
         When it is rendered with the ``json-v1`` template
-        Then the output equals the pre-move ``expected.json`` snapshot and today's ``render(result, "json")``.
+        Then the output equals the pre-move ``expected.json`` snapshot and ``render(result, "json-v1")``.
 
     Boundaries:
         - Focus: schema-1 key order, nesting, the deep-only ``advisory`` key and inventory-only documents
@@ -154,7 +154,7 @@ def test_json_v1_template_equals_pre_move_snapshot(case_name: str, asset_case: C
     rendered = _render(result, "json-v1")
 
     assert rendered == _read_exact(case, "expected.json")
-    assert rendered == render(result, "json")
+    assert rendered == render(result, "json-v1")
 
 
 @pytest.mark.parametrize("name", _GOLDEN_TEMPLATES)

@@ -44,7 +44,7 @@ def _scan(root: Path, fmt: str) -> subprocess.CompletedProcess[bytes]:
     """Run ``docsentinel scan`` over a root in the given format, capturing raw bytes.
 
     :param root: Scan root to inspect.
-    :param fmt: One of ``text``, ``github`` or ``json``.
+    :param fmt: A packaged template name such as ``text``, ``github`` or ``json``.
     :returns: The completed subprocess with byte stdout/stderr.
     """
     return subprocess.run(
@@ -54,7 +54,7 @@ def _scan(root: Path, fmt: str) -> subprocess.CompletedProcess[bytes]:
     )
 
 
-@pytest.mark.parametrize("fmt", ["text", "github", "json"])
+@pytest.mark.parametrize("fmt", ["text", "github", "json", "json-v1", "json-documents"])
 def test_hostile_filename_never_emits_raw_control_bytes(fmt: str, tmp_path: Path):
     """
     [Integration] reporter hostile filename: verifies no raw control byte reaches any sink.
@@ -67,7 +67,7 @@ def test_hostile_filename_never_emits_raw_control_bytes(fmt: str, tmp_path: Path
 
     Boundaries:
         - Focus: the tool-wide reporter neutralisation on a genuine hostile path, end to end
-        - Fixtures/params: parametrized over the three output formats; skips if the OS rejects the name
+        - Fixtures/params: parametrized over the five packaged templates; skips if the OS rejects the name
         - Scope: one CLI subprocess per format
 
     On failure, first check:

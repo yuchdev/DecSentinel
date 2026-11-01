@@ -8,13 +8,22 @@ from typing import Optional
 
 from docsentinel import deep_support
 from docsentinel.baseline import save_baseline
-from docsentinel.config import ConfigError, load_config
+from docsentinel.config import Config, ConfigError, load_config
 from docsentinel.detectors.loader import ensure_standard_loaded
 from docsentinel.engine import scan
 from docsentinel.errors import ExtraNotInstalledError
 from docsentinel.models import ScanResult
 from docsentinel.reporting import neutralize_text, render
 from docsentinel.rules import Rule, rules_for_profile
+from docsentinel.telemetry.filters import TemplateError
+from docsentinel.telemetry.loader import (
+    DEFAULT_TEMPLATE,
+    Template,
+    available_templates,
+    load_named_template,
+    load_template,
+    packaged_template_names,
+)
 
 TEMPLATE = (
     'profile = "fast"\n'
@@ -101,6 +110,52 @@ def _exit_code(result: ScanResult, *, strict: bool = False) -> int:
     if strict:
         return 1 if result.findings else 0
     return 1 if any(finding.severity == "error" for finding in result.findings) else 0
+
+
+def _report_template(format_name: str, template_path: Optional[Path], settings: Config, root: Path) -> Template:
+    """Resolve the report template for ``scan`` before the scan runs.
+
+    ``--template PATH`` wins and is trusted invoker input, read through the loader's
+    regular-file/size/encoding gate. Otherwise ``--format`` must name one of the
+    discovered templates (packaged, then ``report_templates_dir``).
+
+    :param format_name: The ``--format`` value.
+    :param template_path: The ``--template`` value, or ``None``.
+    :param settings: The effective configuration.
+    :param root: The scan root directory ``report_templates_dir`` is relative to.
+    :returns: The validated template.
+    :raises TemplateError: When the template is unknown, unreadable or invalid.
+    """
+    if template_path is not None:
+        return load_template(template_path)
+    names = available_templates(root, settings.report_templates_dir)
+    if format_name not in names:
+        raise TemplateError(f"unknown --format {format_name[:80]!r}; choose from: {', '.join(names)}")
+    return load_named_template(format_name, root=root, templates_dir=settings.report_templates_dir)
+
+
+def _doctor_template_lines() -> list[str]:
+    """Return the ``doctor`` lines listing the selectable report templates.
+
+    The packaged templates are always listed. When the configuration discovered in
+    the current directory sets ``report_templates_dir``, its templates are listed
+    too; a configuration or directory problem is reported on one neutralized line
+    instead of failing ``doctor``.
+
+    :returns: The formatted lines.
+    """
+    lines = [f"report templates (packaged): {', '.join(packaged_template_names())}"]
+    try:
+        settings = load_config(Path.cwd())
+        if settings.report_templates_dir:
+            packaged = set(packaged_template_names())
+            extra = [
+                name for name in available_templates(Path.cwd(), settings.report_templates_dir) if name not in packaged
+            ]
+            lines.append(f"report templates (report_templates_dir): {', '.join(extra) or '(none)'}")
+    except (ConfigError, TemplateError, OSError) as exc:
+        lines.append(f"report templates (report_templates_dir): unavailable: {neutralize_text(str(exc))}")
+    return lines
 
 
 PROJECT_ROOT_MARKERS = ("uv.lock", "pyproject.toml")
@@ -198,7 +253,27 @@ def main(argv: Optional[list[str]] = None) -> int:
     scan_parser.add_argument("--select", type=str, default=None)
     scan_parser.add_argument("--ignore", type=str, default=None)
     scan_parser.add_argument("--baseline", type=Path, default=None)
-    scan_parser.add_argument("--format", choices=("text", "json", "github"), default="text")
+    scan_parser.add_argument(
+        "--format",
+        default=DEFAULT_TEMPLATE,
+        metavar="NAME",
+        help=(
+            f"Report template name: one of {', '.join(packaged_template_names())}, "
+            "or a template in report_templates_dir (default: %(default)s)"
+        ),
+    )
+    scan_parser.add_argument(
+        "--template",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="Render with this template file (wins over --format)",
+    )
+    scan_parser.add_argument(
+        "--show-clean-documents",
+        action="store_true",
+        help="List documents without problems in the text report as well",
+    )
     scan_parser.add_argument("--strict", action="store_true")
     scan_parser.add_argument(
         "--i-understand-deep-is-heuristic",
@@ -259,6 +334,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                 codes = ", ".join(rule.code for rule in opt_in)
                 summary += f" ({len(opt_in)} opt-in, off unless configured: {codes})"
             print(summary)
+        for line in _doctor_template_lines():
+            print(line)
         return 0
     if args.command == "baseline":
         try:
@@ -286,7 +363,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 0
     try:
         target = Path(args.root).resolve()
-        settings = load_config(target.parent if target.is_file() else target, args.config)
+        directory = target.parent if target.is_file() else target
+        settings = load_config(directory, args.config)
         changes = {}
         if args.profile is not None:
             changes["profile"] = args.profile
@@ -298,13 +376,17 @@ def main(argv: Optional[list[str]] = None) -> int:
             changes["baseline"] = str(args.baseline)
         if getattr(args, "deep_confirm", False):
             changes["deep_confirm"] = True
+        if args.show_clean_documents:
+            changes["report_show_clean_documents"] = True
         if changes:
             settings = replace(settings, **changes)
+        template = _report_template(args.format, args.template, settings, directory)
         result = scan(args.root, config=settings)
-    except (ConfigError, ValueError, OSError) as exc:
+        report = render(result, config=settings, template=template, root=directory, strict=args.strict)
+    except (ConfigError, ValueError, OSError, TemplateError, NotImplementedError) as exc:
         print(f"Scan failed: {neutralize_text(str(exc))}", file=sys.stderr)
         return 2
-    print(render(result, args.format))
+    print(report)
     return _exit_code(result, strict=args.strict)
 
 

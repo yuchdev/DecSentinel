@@ -167,16 +167,16 @@ def test_v1_json_render_excludes_new_fields():
 
     Scenario:
         Given two scan results differing only in enrichment and structured diagnostics
-        When both are rendered as JSON
+        When both are rendered with the schema-1 ``json-v1`` template
         Then the outputs are byte-identical and carry none of the new keys.
 
     Boundaries:
-        - Focus: ``reporting._schema_v1_dict`` exclusions
+        - Focus: the schema-1 key set of the ``json-v1`` template
         - Fixtures/params: none
         - Scope: rendering of in-memory results
 
     On failure, first check:
-        - ``_V1_EXCLUDED_RESULT_KEYS`` / ``_V1_EXCLUDED_FINDING_KEYS`` in ``reporting.py``
+        - The ``body`` of ``telemetry/templates/json-v1.json``
     """
     base = {
         "profile": "fast",
@@ -193,10 +193,10 @@ def test_v1_json_render_excludes_new_fields():
         **base,
     )
 
-    rendered = render(enriched, "json")
+    rendered = render(enriched, "json-v1")
     data = json.loads(rendered)
 
-    assert rendered == render(plain, "json")
+    assert rendered == render(plain, "json-v1")
     assert set(data) == {"schema_version", "profile", "documents", "findings", "enabled_rules", "pending", "notice"}
     assert set(data["findings"][0]) == {"rule", "path", "message", "severity", "line"}
     assert enriched.findings[0].column == 7  # render must not mutate the result

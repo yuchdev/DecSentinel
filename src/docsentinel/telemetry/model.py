@@ -139,6 +139,7 @@ CONTEXT_SCHEMA: Final[Mapping[str, Variable]] = _frozen(
         "severity_counts": Variable("dict[str,int]", TRUSTED),
         "rule_counts": Variable("dict[str,int]", TRUSTED),
         "model": Variable("str|null", TRUSTED),
+        "show_clean_documents": Variable("bool", TRUSTED),
         "documents": Variable("list[document]", None, DOCUMENT_SCHEMA),
         "documents_with_problems": Variable("list[document]", None, DOCUMENT_SCHEMA),
         "findings": Variable("list[problem]", None, FLAT_PROBLEM_SCHEMA),
@@ -213,6 +214,7 @@ class ReportModel:
         model: Optional[str] = None,
         report_include_run_meta: bool = False,
         report_schema_version: int = REPORT_SCHEMA_VERSION,
+        show_clean_documents: bool = False,
     ) -> dict[str, JsonValue]:
         """Build the JSON-shaped report context for a completed scan.
 
@@ -236,6 +238,9 @@ class ReportModel:
         :param report_include_run_meta: Add the per-run ``run.generated_at`` and
             ``run.id`` values; off by default so the context is deterministic.
         :param report_schema_version: The schema declared by the rendering template.
+        :param show_clean_documents: Value of the ``show_clean_documents`` flag, which
+            a text template reads to list documents without problems
+            (``--show-clean-documents`` / ``report_show_clean_documents``).
         :returns: The context tree (``dict``/``list``/``str``/``int``/``bool``/``None`` only).
         :raises NotImplementedError: If ``extensions`` is non-empty.
         :raises ValueError: If ``model`` does not match :data:`MODEL_ID_PATTERN`; the
@@ -281,6 +286,7 @@ class ReportModel:
             "severity_counts": _sorted_counts([finding.severity for finding in result.findings]),
             "rule_counts": _sorted_counts([finding.rule for finding in result.findings]),
             "model": model,
+            "show_clean_documents": bool(show_clean_documents),
             "documents": document_list,
             "documents_with_problems": with_problems,
             "findings": flat,

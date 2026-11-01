@@ -81,11 +81,13 @@ from json.encoder import encode_basestring_ascii
 from types import MappingProxyType
 from typing import Any, Final, Optional
 
-from docsentinel.telemetry.filters import TemplateError, apply_filter, neutralize, to_text
+from docsentinel.telemetry.filters import JSON_FILTER, TemplateError, apply_filter, neutralize, to_text
 from docsentinel.telemetry.loader import (
     PLACEMENT_APPEND,
     PLACEMENT_BLOCK,
     PLACEMENT_ONE_LINE,
+    TYPE_JSON,
+    TYPE_TEXT,
     AllOf,
     AnyOf,
     Compare,
@@ -664,7 +666,7 @@ class _Renderer:
         :returns: The bound for ``json`` and ``join``; 0 for any other filter, whose
             output is bounded by its (already present) scalar input.
         """
-        if name == "json":
+        if name == JSON_FILTER:
             return self._bounded_size(value)
         if name == "join" and type(value) is list and args and isinstance(args[0], str):
             limit = self._budget.remaining() + 1
@@ -1048,9 +1050,9 @@ def render_template(
     try:
         _check_context(context)
         renderer = _Renderer(MappingProxyType(context))
-        if template.type == "text":
+        if template.type == TYPE_TEXT:
             return renderer.text(template)
-        if template.type == "json":
+        if template.type == TYPE_JSON:
             return renderer.json(template)
     except RecursionError:
         raise TemplateError("template nesting is too deep to render") from None

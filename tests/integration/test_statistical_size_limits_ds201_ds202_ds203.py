@@ -111,7 +111,7 @@ def test_cli_doc_sentinel_toml_applies_paragraph_floor(tmp_path: Path, capsys):
         encoding="utf-8",
     )
 
-    exit_code = main(["scan", str(tmp_path), "--format", "json"])
+    exit_code = main(["scan", str(tmp_path), "--format", "json-v1"])
     payload = json.loads(capsys.readouterr().out)
 
     assert exit_code == 0

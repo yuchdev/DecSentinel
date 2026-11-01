@@ -122,6 +122,17 @@ NAME_PATTERN: Final[re.Pattern[str]] = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 #: Directory of the packaged templates (Story 03.0 ships ``text``/``github``/``json``).
 PACKAGED_TEMPLATES_DIR: Final[Path] = Path(__file__).resolve().parent / "templates"
 
+#: The two template ``type`` values (spec §2).
+TYPE_TEXT: Final[str] = "text"
+TYPE_JSON: Final[str] = "json"
+
+#: Template used when no format is named (``render()`` and ``docsentinel scan``).
+DEFAULT_TEMPLATE: Final[str] = "text"
+
+#: Most templates :func:`available_templates` accepts from ``report_templates_dir``;
+#: a directory holding more fails closed instead of being listed partially.
+MAX_DIRECTORY_TEMPLATES: Final[int] = 1024
+
 #: Recognised ``output.sink`` values of a ``text`` template (M5).
 SINK_TERMINAL: Final[str] = "terminal"
 SINK_GITHUB: Final[str] = "github"
@@ -1730,3 +1741,80 @@ def load_template(
     return _finish(
         _read_gated(canonical / configured, label, nofollow=True), origin="path", source=configured, expected_name=None
     )
+
+
+def _is_template_name(value: object) -> bool:
+    """Return whether ``value`` is a template name rather than a path (M9).
+
+    :param value: Candidate name.
+    :returns: ``True`` for a string of at most 64 characters matching :data:`NAME_PATTERN`.
+    """
+    return isinstance(value, str) and len(value) <= _MAX_NAME and NAME_PATTERN.fullmatch(value) is not None
+
+
+def load_named_template(name: str, *, root: Optional[Path] = None, templates_dir: Optional[str] = None) -> Template:
+    """Load a template by name only; a path-shaped value is refused, never opened.
+
+    Used where the caller supplies a *format name* (``render(format=...)``,
+    ``docsentinel scan --format``): unlike :func:`load_template`, a value that is not
+    a name is an unknown template rather than a file path to read.
+
+    :param name: The template name (packaged first, then ``templates_dir``).
+    :param root: The scan root, required for ``templates_dir``.
+    :param templates_dir: The configured ``report_templates_dir``, or ``None``.
+    :returns: The immutable, validated template.
+    :raises TemplateError: For a non-name, an unknown name, or any load failure.
+    """
+    if not _is_template_name(name):
+        shown = _echo(name) if isinstance(name, str) else "<not text>"
+        raise TemplateError(f"unknown template: {shown}")
+    return _load_by_name(name, root, templates_dir)
+
+
+def packaged_template_names() -> tuple[str, ...]:
+    """Return the names of the packaged templates, sorted.
+
+    :returns: Every ``templates/<name>.json`` stem that is a valid template name.
+    """
+    names = (entry.stem for entry in PACKAGED_TEMPLATES_DIR.glob("*.json") if entry.is_file())
+    return tuple(sorted(name for name in names if _is_template_name(name)))
+
+
+def available_templates(root: Optional[Path] = None, templates_dir: Optional[str] = None) -> tuple[str, ...]:
+    """Return every template name a scan can select with ``--format``, sorted.
+
+    The packaged names are always listed. With ``templates_dir`` the directory passes
+    the same containment gate as a template load (M10) and is listed without
+    following symlinks; only regular ``<name>.json`` files with a valid name count,
+    and a name already packaged is not repeated (packaged names cannot be shadowed).
+    Files are not opened or validated here; a selected template is validated when
+    loaded.
+
+    :param root: The scan root, required for ``templates_dir``.
+    :param templates_dir: The configured ``report_templates_dir``, or ``None``.
+    :returns: The sorted, de-duplicated template names.
+    :raises TemplateError: When ``templates_dir`` is not a string, escapes the root,
+        cannot be listed, or holds more than :data:`MAX_DIRECTORY_TEMPLATES` templates.
+    """
+    packaged = packaged_template_names()
+    if not templates_dir:
+        return packaged
+    if not isinstance(templates_dir, str):
+        raise TemplateError("report_templates_dir must be a string")
+    if root is None:
+        raise TemplateError("report_templates_dir needs a scan root")
+    canonical = Path(root).resolve()
+    _check_contained(canonical, templates_dir, "report_templates_dir")
+    found: set[str] = set()
+    try:
+        with os.scandir(canonical / templates_dir) as entries:
+            for entry in entries:
+                stem, suffix = os.path.splitext(entry.name)
+                if suffix != ".json" or not _is_template_name(stem) or not entry.is_file(follow_symlinks=False):
+                    continue
+                found.add(stem)
+                if len(found) > MAX_DIRECTORY_TEMPLATES:
+                    raise TemplateError(f"report_templates_dir holds more than {MAX_DIRECTORY_TEMPLATES} templates")
+    except OSError:
+        raise TemplateError(f"report_templates_dir could not be listed: {_echo(templates_dir)}") from None
+    return tuple(sorted(found.union(packaged)))

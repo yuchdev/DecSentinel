@@ -4,7 +4,10 @@ Milestone 0007 Story 02.0 Task 02. A severity-routing ``github``-sink template -
 ``when`` conditions wrapping literal ``::error``/``::warning`` lines -- is validated
 by the Task 01 loader, rendered over :meth:`ReportModel.build` of an in-memory scan
 with hostile paths and messages, and compared byte-for-byte with the pre-milestone
-``reporting.render(result, "github")`` (threat model M6 golden). No asset is read:
+GitHub output (threat model M6 golden). Story 03.0 deleted that renderer from
+``reporting.py``, so :func:`_legacy_github` keeps a frozen copy of its layout as the
+oracle (its escapers are the moved filters, pinned to the originals by the filters
+unit tests). No asset is read:
 the hostile strings are built in the test body. Non-printable code points are
 spelled with ``chr()``.
 """
@@ -13,12 +16,11 @@ from typing import Any
 
 import pytest
 
-from docsentinel import reporting
 from docsentinel.config import Config
 from docsentinel.models import Document, Finding, ScanResult
 from docsentinel.telemetry import engine
 from docsentinel.telemetry.engine import render_template
-from docsentinel.telemetry.filters import TemplateError, neutralize
+from docsentinel.telemetry.filters import TemplateError, gha_data, gha_property, neutralize
 from docsentinel.telemetry.loader import LineNode, LoopNode, VarRef, validate_template
 from docsentinel.telemetry.model import ReportModel
 
@@ -75,6 +77,17 @@ GITHUB_ROUTING: dict[str, Any] = {
 }
 
 
+def _legacy_github(result: ScanResult) -> str:
+    """Return the pre-milestone GitHub report (frozen copy of the deleted ``reporting._render_github``)."""
+    lines: list[str] = []
+    for finding in result.findings:
+        level = "error" if finding.severity == "error" else "warning"
+        escaped_file = gha_property(finding.path)
+        location = f"file={escaped_file},line={finding.line}" if finding.line is not None else f"file={escaped_file}"
+        lines.append(f"::{level} {location}::{gha_data(finding.message)}")
+    return "\n".join(lines)
+
+
 def _result() -> ScanResult:
     """Return a scan with hostile, located and unlocated findings over three severities."""
     findings = (
@@ -100,7 +113,7 @@ def test_severity_routing_github_template_matches_legacy_sink_byte_for_byte():
         Given hostile CR/LF, ESC, U+202E, ``::``, ``,``, ``:``, ``%``, ``##[`` and a lone surrogate in paths
             and messages, with located and unlocated findings at error, warning and info severity
         When the routing template renders ``ReportModel.build`` of the scan
-        Then the output equals ``reporting.render(result, "github")`` byte for byte.
+        Then the output equals the pre-milestone GitHub report (``_legacy_github``) byte for byte.
 
     Boundaries:
         - Focus: threat model M6 golden; level routing is data (``when``), not Python
@@ -108,7 +121,7 @@ def test_severity_routing_github_template_matches_legacy_sink_byte_for_byte():
         - Scope: validate_template -> ReportModel.build -> render_template
 
     On failure, first check:
-        - ``filters.gha_property`` / ``gha_data`` against ``reporting._escape_*``
+        - ``filters.gha_property`` / ``gha_data`` against the pre-move escapers (filters unit tests)
         - Condition evaluation of ``eq null`` / ``not``
     """
     result = _result()
@@ -116,7 +129,7 @@ def test_severity_routing_github_template_matches_legacy_sink_byte_for_byte():
 
     rendered = render_template(template, ReportModel.build(result, Config()))
 
-    assert rendered == reporting.render(result, "github")
+    assert rendered == _legacy_github(result)
     lines = rendered.split("\n")
     assert [line.split(" ", 1)[0] for line in lines] == ["::error", "::warning", "::error", "::warning"]
     assert all(neutralize(line) == line for line in lines)
@@ -236,16 +249,16 @@ def test_spec_text_excerpt_renders_findings_under_their_document():
 
     rendered = render_template(template, ReportModel.build(result, Config())).split("\n")
 
-    hostile = reporting._neutralize_controls(_HOSTILE_PATH)
+    hostile = neutralize(_HOSTILE_PATH)
     assert rendered == [
         "Profile: fast",
         'Enabled rules: ["DS101"]',
         "12 fast rule(s) evaluated; opt-in rule(s) not enabled: DS110 (set require_fence_languages)",
         "docs/a.md (3 bytes)",
         "  warning: docs/a.md: stray comment: a,b",
-        "  error: docs/a.md: " + reporting._neutralize_controls(f"missing {RLO}path"),
+        "  error: docs/a.md: " + neutralize(f"missing {RLO}path"),
         f"{hostile} (9 bytes)",
-        f"  error: {hostile}: " + reporting._neutralize_controls(_HOSTILE_MESSAGE),
+        f"  error: {hostile}: " + neutralize(_HOSTILE_MESSAGE),
     ]
     assert all(neutralize(line) == line for line in rendered)
 
@@ -257,7 +270,7 @@ def test_realistic_report_stays_far_below_the_step_budget(monkeypatch: pytest.Mo
     Scenario:
         Given an in-memory scan of 358 documents and 5000 located error/warning findings
         When the severity-routing github template renders ``ReportModel.build`` of it under the real caps
-        Then it equals ``reporting.render(result, "github")`` and the steps charged stay below
+        Then it equals the pre-milestone GitHub report and the steps charged stay below
             ``MAX_STEPS // 10`` (the margin the engine documents).
 
     Boundaries:
@@ -292,5 +305,5 @@ def test_realistic_report_stays_far_below_the_step_budget(monkeypatch: pytest.Mo
 
     rendered = render_template(validate_template(GITHUB_ROUTING), ReportModel.build(result, Config()))
 
-    assert rendered == reporting.render(result, "github")
+    assert rendered == _legacy_github(result)
     assert 0 < total["steps"] < engine.MAX_STEPS // 10

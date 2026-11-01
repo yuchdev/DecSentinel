@@ -1,10 +1,13 @@
-"""Golden snapshots of today's ``render(result, fmt)`` output (Milestone 0007, Story 01.0 Task 01).
+"""Golden snapshots of the public ``render(result, fmt)`` output (Milestone 0007, Stories 01.0 and 03.0).
 
-Each case under ``tests/assets/report/<case>/`` stores a serialized ``result.json`` input plus the
-byte-exact ``expected.txt``, ``expected.json`` and ``expected.github`` renderings captured from the
-renderer before the telemetry package restructure. They prove later reporting work is inert for the
-existing three formats. ``ScanResult`` objects are built directly from the stored input rather than
-via a live scan, so the snapshots never depend on detector wording or optional extras.
+Each case under ``tests/assets/report/<case>/`` stores a serialized ``result.json`` input. Story 01.0
+captured the byte-exact pre-milestone ``expected.txt``, ``expected.json`` and ``expected.github``
+renderings. Since the Story 03.0 cut-over every format is a packaged template: ``json-v1`` must still
+equal the pre-milestone ``expected.json`` byte-for-byte, while ``text``, ``github``, ``json`` (schema 2)
+and ``json-documents`` are pinned to the Story 03.0 ``expected.template-<name>`` goldens (the old
+``expected.txt``/``expected.github`` remain as legacy references for the standard-templates suite).
+``ScanResult`` objects are built directly from the stored input rather than via a live scan, so the
+snapshots never depend on detector wording or optional extras.
 """
 
 import json
@@ -19,14 +22,16 @@ from tests.asset_helpers import AssetCase
 #: Asset group holding the report snapshot cases.
 _ASSET_GROUP: str = "report"
 
-#: Snapshot cases: one per profile plus a hostile control/bidi character case.
-_CASES: tuple[str, ...] = ("fast", "standard", "deep", "hostile_controls")
+#: Snapshot cases: one per profile, a hostile control/bidi character case, and the columns case.
+_CASES: tuple[str, ...] = ("fast", "standard", "deep", "hostile_controls", "columns_clean_docs")
 
-#: Output format mapped to the expected-output file name in each case.
+#: Output format (packaged template name) mapped to the expected-output file name in each case.
 _EXPECTED_FILES: dict[str, str] = {
-    "text": "expected.txt",
-    "json": "expected.json",
-    "github": "expected.github",
+    "text": "expected.template-text",
+    "json": "expected.template-json",
+    "json-v1": "expected.json",
+    "json-documents": "expected.template-json-documents",
+    "github": "expected.template-github",
 }
 
 
@@ -55,6 +60,8 @@ def _load_result(case: AssetCase) -> ScanResult:
         enabled_rules=tuple(data["enabled_rules"]),
         pending=tuple(data["pending"]),
         notice=data["notice"],
+        rules_evaluated=data.get("rules_evaluated", 0),
+        opt_in_off=tuple((code, option) for code, option in data.get("opt_in_off", ())),
     )
 
 
@@ -69,18 +76,18 @@ def test_render_matches_golden_snapshot(
     [Integration] report golden snapshots: verifies render output is byte-identical to the stored snapshot.
 
     Scenario:
-        Given a stored ScanResult for the fast, standard or deep profile, or one with hostile controls
-        When it is rendered as text, json or github
-        Then the output equals the committed expected file byte-for-byte.
+        Given a stored ScanResult for the fast, standard or deep profile, one with hostile controls, or the columns case
+        When it is rendered as text, json, json-v1, json-documents or github
+        Then the output equals the committed expected file byte-for-byte (json-v1: the pre-milestone snapshot).
 
     Boundaries:
-        - Focus: the public ``render(result, fmt)`` contract for all three existing formats
-        - Fixtures/params: parametrized over four cases and three formats (twelve snapshots)
+        - Focus: the public ``render(result, fmt)`` contract for every packaged template
+        - Fixtures/params: parametrized over five cases and five formats (twenty-five snapshots)
         - Scope: rendering only; no discovery or detector runs
 
     On failure, first check:
         - Whether a reporting change was intended; if so the snapshot needs a deliberate, reviewed update
-        - Control/bidi neutralisation in ``reporting._neutralize_controls`` for the hostile case
+        - Control/bidi neutralisation in ``telemetry.filters.neutralize`` for the hostile case
     """
     case = asset_case(_ASSET_GROUP, case_name)
     expected = _read_exact(case, _EXPECTED_FILES[fmt])

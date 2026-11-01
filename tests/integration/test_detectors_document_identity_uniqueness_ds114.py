@@ -914,7 +914,7 @@ def test_reports_are_stable_across_formats(asset_case: Callable[[str, str], Asse
     assert render(result, "text") == text
     assert 'error: b.md: duplicate document id "alpha" (already declared in a.md)' in text
 
-    payload = json.loads(render(result, "json"))
+    payload = json.loads(render(result, "json-v1"))
     assert payload["schema_version"] == 1
     assert payload["enabled_rules"] == ["DS114"]
     assert payload["findings"][0]["rule"] == "DS114"
@@ -923,7 +923,7 @@ def test_reports_are_stable_across_formats(asset_case: Callable[[str, str], Asse
 
     github = render(result, "github")
     assert render(result, "github") == github
-    assert github.startswith("::error file=b.md,line=2::")
+    assert github.startswith("::error file=b.md,line=2,title=DS114::")
 
 
 def test_hostile_ids_are_bounded_and_repr_escaped(tmp_path: Path):
@@ -1290,7 +1290,7 @@ def test_cli_fast_json_scan_reports_ds114_and_exits_one_without_strict(
     """
     case = asset_case("ds114", "identical_ids_two_docs")
 
-    exit_code = cli.main(["scan", str(case.root), "--profile", "fast", "--format", "json"])
+    exit_code = cli.main(["scan", str(case.root), "--profile", "fast", "--format", "json-v1"])
     captured = capsys.readouterr()
     payload = json.loads(captured.out)
     ds114 = [finding for finding in payload["findings"] if finding["rule"] == "DS114"]

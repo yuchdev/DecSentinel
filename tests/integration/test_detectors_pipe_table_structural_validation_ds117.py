@@ -657,7 +657,7 @@ def test_reports_are_stable_across_formats(asset_case: Callable[[str, str], Asse
     assert render(result, "text") == text
     assert "warning: README.md: table body row has 3 cells; the header declares 2" in text
 
-    payload = json.loads(render(result, "json"))
+    payload = json.loads(render(result, "json-v1"))
     assert payload["schema_version"] == 1
     assert payload["enabled_rules"] == ["DS117"]
     assert payload["findings"][0]["rule"] == "DS117"
@@ -666,7 +666,7 @@ def test_reports_are_stable_across_formats(asset_case: Callable[[str, str], Asse
 
     github = render(result, "github")
     assert render(result, "github") == github
-    assert github.startswith("::warning file=README.md,line=5::")
+    assert github.startswith("::warning file=README.md,line=5,title=DS117::")
 
 
 def test_cli_fast_json_scan_reports_ds117_warning_and_exit_zero(
@@ -692,7 +692,7 @@ def test_cli_fast_json_scan_reports_ds117_warning_and_exit_zero(
     """
     case = asset_case("ds117", "missing_body_cell")
 
-    exit_code = cli.main(["scan", str(case.root), "--profile", "fast", "--format", "json"])
+    exit_code = cli.main(["scan", str(case.root), "--profile", "fast", "--format", "json-v1"])
 
     captured = capsys.readouterr()
     payload = json.loads(captured.out)
@@ -1272,7 +1272,7 @@ def test_hostile_cell_content_cannot_inject_into_text_or_github_output(tmp_path:
     github = render(result, "github")
     github_lines = github.splitlines()
     assert len(github_lines) == 1
-    assert github_lines[0].startswith("::warning file=README.md,line=3::")
+    assert github_lines[0].startswith("::warning file=README.md,line=3,title=DS117::")
     assert "\x1b" not in github
 
 

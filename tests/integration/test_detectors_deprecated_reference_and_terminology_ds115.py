@@ -448,7 +448,7 @@ def test_cli_readiness_error_exits_two_without_report_or_absolute_path(
         f'profile = "fast"\ndeprecated_references_file = "{mapping_value}"\n', encoding="utf-8"
     )
 
-    exit_code = cli.main(["scan", str(loaded.root), "--profile", "fast", "--format", "json"])
+    exit_code = cli.main(["scan", str(loaded.root), "--profile", "fast", "--format", "json-v1"])
 
     captured = capsys.readouterr()
     assert exit_code == 2
@@ -603,7 +603,7 @@ def test_cli_fast_json_scan_reports_ds115_warning_and_exits_zero(
         'profile = "fast"\ndeprecated_references_file = "mapping.toml"\n', encoding="utf-8"
     )
 
-    exit_code = cli.main(["scan", str(loaded.root), "--profile", "fast", "--format", "json"])
+    exit_code = cli.main(["scan", str(loaded.root), "--profile", "fast", "--format", "json-v1"])
 
     captured = capsys.readouterr()
     payload = json.loads(captured.out)
@@ -1421,7 +1421,7 @@ def test_reports_are_stable_across_formats(asset_case: Callable[[str, str], Asse
     assert "\x00" not in text and "\x1b" not in text
     assert str(Path(os.path.realpath(loaded.root))) not in text
 
-    payload = json.loads(render(result, "json"))
+    payload = json.loads(render(result, "json-v1"))
     assert payload["schema_version"] == 1
     assert payload["enabled_rules"] == ["DS115"]
     assert payload["findings"][0]["rule"] == "DS115"
@@ -1430,7 +1430,7 @@ def test_reports_are_stable_across_formats(asset_case: Callable[[str, str], Asse
 
     github = render(result, "github")
     assert render(result, "github") == github
-    assert github.startswith("::warning file=README.md,line=3::")
+    assert github.startswith("::warning file=README.md,line=3,title=DS115::")
 
 
 def test_hostile_configured_path_yields_bounded_repr_escaped_error(tmp_path: Path):
@@ -1816,7 +1816,7 @@ def test_deeply_nested_toml_mapping_fails_closed_through_scan_and_cli(
     (root / "docsentinel.toml").write_text(
         'profile = "fast"\ndeprecated_references_file = "mapping.toml"\n', encoding="utf-8"
     )
-    exit_code = cli.main(["scan", str(root), "--profile", "fast", "--format", "json"])
+    exit_code = cli.main(["scan", str(root), "--profile", "fast", "--format", "json-v1"])
 
     captured = capsys.readouterr()
     assert exit_code == 2

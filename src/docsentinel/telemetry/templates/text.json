@@ -2,7 +2,7 @@
   "template_version": 1,
   "name": "text",
   "type": "text",
-  "description": "Human-readable report: findings directly under their document, clean documents hidden.",
+  "description": "Human-readable report: findings directly under their document, clean documents hidden unless show_clean_documents is set.",
   "requires_extensions": [],
   "output": { "join": "\n", "trailing_newline": false, "sink": "terminal" },
   "lines": [
@@ -18,7 +18,42 @@
     { "type": "line", "when": { "var": "advisory", "truthy": true }, "text": "{advisory}", "variables_used": ["advisory"] },
     {
       "type": "loop",
+      "when": { "var": "show_clean_documents", "falsy": true },
       "over": "documents_with_problems",
+      "as": "doc",
+      "placement": "block",
+      "body": [
+        {
+          "type": "line",
+          "when": { "var": "doc.bytes", "ne": null },
+          "text": "{doc.path|neutralize} ({doc.bytes} bytes)",
+          "variables_used": ["doc.path", "doc.bytes"]
+        },
+        {
+          "type": "line",
+          "when": { "var": "doc.bytes", "eq": null },
+          "text": "{doc.path|neutralize}",
+          "variables_used": ["doc.path"]
+        },
+        {
+          "type": "loop",
+          "over": "doc.problems",
+          "as": "p",
+          "placement": "block",
+          "body": [
+            {
+              "type": "line",
+              "text": "  {p.severity}: {doc.path|neutralize}: {p.message|neutralize}",
+              "variables_used": ["p.severity", "doc.path", "p.message"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "loop",
+      "when": { "var": "show_clean_documents", "truthy": true },
+      "over": "documents",
       "as": "doc",
       "placement": "block",
       "body": [

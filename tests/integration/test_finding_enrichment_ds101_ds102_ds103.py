@@ -172,7 +172,7 @@ def test_scan_enrichment_reaches_report_model_but_not_v1_json(asset_case: Callab
         - Scope: fast profile scan of a temporary tree
 
     On failure, first check:
-        - ``reporting._schema_v1_dict`` exclusions and ``ReportModel`` problem fields
+        - The ``json-v1`` template key set and ``ReportModel`` problem fields
     """
     root = asset_case("ds101", "dangling_link_file").root
     asset_case("ds102", "stray_comment_file")
@@ -180,7 +180,7 @@ def test_scan_enrichment_reaches_report_model_but_not_v1_json(asset_case: Callab
     config = Config(select=("DS101", "DS102", "DS103"))
 
     result = scan(root, config=config)
-    legacy = json.loads(render(result, "json"))
+    legacy = json.loads(render(result, "json-v1"))
     context = ReportModel.build(result, config)
 
     assert {key for finding in legacy["findings"] for key in finding} == {"rule", "path", "message", "severity", "line"}

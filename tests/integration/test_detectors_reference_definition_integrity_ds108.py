@@ -626,7 +626,7 @@ def test_reports_are_stable_across_formats(asset_case: Callable[[str, str], Asse
     assert render(result, "text") == text
     assert "warning: README.md: undefined reference label: missing" in text
 
-    payload = json.loads(render(result, "json"))
+    payload = json.loads(render(result, "json-v1"))
     assert payload["schema_version"] == 1
     assert payload["enabled_rules"] == ["DS108"]
     assert payload["findings"][0]["rule"] == "DS108"
@@ -635,7 +635,7 @@ def test_reports_are_stable_across_formats(asset_case: Callable[[str, str], Asse
 
     github = render(result, "github")
     assert render(result, "github") == github
-    assert github.startswith("::warning file=README.md,line=3::")
+    assert github.startswith("::warning file=README.md,line=3,title=DS108::")
 
 
 def test_cli_fast_json_scan_reports_ds108_warning_and_exit_zero(
@@ -661,7 +661,7 @@ def test_cli_fast_json_scan_reports_ds108_warning_and_exit_zero(
     """
     case = asset_case("ds108", "missing_explicit_reference")
 
-    exit_code = cli.main(["scan", str(case.root), "--profile", "fast", "--format", "json"])
+    exit_code = cli.main(["scan", str(case.root), "--profile", "fast", "--format", "json-v1"])
 
     captured = capsys.readouterr()
     payload = json.loads(captured.out)

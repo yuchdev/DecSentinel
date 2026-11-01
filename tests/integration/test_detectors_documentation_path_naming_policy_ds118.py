@@ -551,7 +551,7 @@ def test_cli_fast_json_scan_reports_ds118_warning_and_exits_zero(
         'profile = "fast"\ndocumentation_naming = "kebab"\n', encoding="utf-8"
     )
 
-    exit_code = cli.main(["scan", str(loaded.root), "--profile", "fast", "--format", "json"])
+    exit_code = cli.main(["scan", str(loaded.root), "--profile", "fast", "--format", "json-v1"])
 
     captured = capsys.readouterr()
     payload = json.loads(captured.out)
@@ -622,7 +622,7 @@ def test_cli_clean_case_without_strict_exits_zero(
         'profile = "fast"\ndocumentation_naming = "kebab"\n', encoding="utf-8"
     )
 
-    exit_code = cli.main(["scan", str(loaded.root), "--profile", "fast", "--format", "json"])
+    exit_code = cli.main(["scan", str(loaded.root), "--profile", "fast", "--format", "json-v1"])
 
     captured = capsys.readouterr()
     payload = json.loads(captured.out)
@@ -1300,7 +1300,7 @@ def test_reports_are_stable_across_formats(asset_case: Callable[[str, str], Asse
     assert render(result, "text") == text
     assert f"warning: docs/GettingStarted.md: {expected}" in text
 
-    payload = json.loads(render(result, "json"))
+    payload = json.loads(render(result, "json-v1"))
     assert payload["schema_version"] == 1
     assert payload["enabled_rules"] == ["DS118"]
     assert payload["findings"][0]["rule"] == "DS118"
@@ -1309,7 +1309,7 @@ def test_reports_are_stable_across_formats(asset_case: Callable[[str, str], Asse
 
     github = render(result, "github")
     assert render(result, "github") == github
-    assert github.startswith("::warning file=docs/GettingStarted.md::")
+    assert github.startswith("::warning file=docs/GettingStarted.md,title=DS118::")
 
 
 def test_detect_import_path_pulls_no_standard_extras():

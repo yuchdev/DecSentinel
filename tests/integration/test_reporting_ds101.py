@@ -66,4 +66,4 @@ def test_cli_scan_with_findings_and_github_format(
 
     assert exit_code == 1
     out = capsys.readouterr().out
-    assert out.startswith("::error file=README.md,line=1::")
+    assert out.startswith("::error file=README.md,line=1,col=11,title=DS101::")
