@@ -6,6 +6,7 @@
 - [Configuration](#configuration)
 - [Rule codes and selection](#rule-codes-and-selection)
 - [Policy options (Milestone 0005)](#policy-options-milestone-0005)
+- [Report options (Milestone 0007)](#report-options-milestone-0007)
 - [Fast profile rules](#fast-profile-rules)
 - [Opt-in policy rules](#opt-in-policy-rules)
 - [Standard profile](#standard-profile)
@@ -21,7 +22,7 @@ Every consumer (CLI, Python library, pytest plugin) goes through the same engine
 | `config`         | Validates local TOML input and builds the effective `Config`.                                     |
 | `discovery`      | Inventories Markdown files in a stable order.                                                     |
 | `engine.scan`    | Orchestrates the registered analyzers and applies baseline filters.                               |
-| `reporting`      | Presents the shared `ScanResult` contract for the CLI and Python clients.                         |
+| `reporting`      | `render()`: resolves a report template and renders the shared `ScanResult` through it.            |
 | `telemetry`      | Fault events, finding classification (`classify`) and the report context (`ReportModel`).         |
 | pytest plugin    | Opt-in; calls the same engine.                                                                    |
 
@@ -169,6 +170,27 @@ consumed. Options are grouped by the rule that reads them.
 | `documentation_naming_allow`           | `README.md`, `index.md` | File names (or whole relative paths) exempt from the policy.                                |
 | `documentation_naming_directories`     | `true`                  | Whether directory components are checked as well as file names.                             |
 | `documentation_naming_prefix_patterns` | `[]`                    | Glob exceptions for prefixes such as numeric ADR numbers (`?` and `*` only, never a regex). |
+
+## Report options (Milestone 0007)
+
+Every report is rendered from a template (see the
+[report template format](/docs/specs/report-template-format.md)). These typed options load from
+both config file forms and are validated like the policy options above:
+
+| Option                        | Default | Meaning                                                                                      |
+|-------------------------------|---------|----------------------------------------------------------------------------------------------|
+| `report_templates_dir`        | none    | Directory, relative to the scan root, of extra templates selectable by name with `--format`. |
+| `report_show_clean_documents` | `false` | Whether the text report also lists documents without problems (`--show-clean-documents`).    |
+| `report_include_run_meta`     | `false` | Whether the report context carries the per-run `run.generated_at` and `run.id` values.       |
+
+- `report_templates_dir` is checked lexically when the configuration loads. The template loader
+  applies the full containment gate (no symlink out of the root) before it lists or opens anything
+  in the directory. A packaged template name can never be shadowed by a directory template.
+- `docsentinel scan --format NAME` accepts any packaged name (`text`, `github`, `json`, `json-v1`,
+  `json-documents`) or a template name from `report_templates_dir`. `--template PATH` renders an
+  invoker-supplied file and wins over `--format`. Any template error prints `Scan failed:` and exits
+  `2`. `docsentinel doctor` lists the discovered templates.
+- `--format json` is schema 2 (one record per document). The schema-1 bytes are `--format json-v1`.
 
 ## Fast profile rules
 
