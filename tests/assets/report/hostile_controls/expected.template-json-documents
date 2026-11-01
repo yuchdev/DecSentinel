@@ -1,0 +1,40 @@
+[
+  {
+    "path": "evil\u001b[31m\r\n::error::spoofed\u202e.md",
+    "bytes": 40,
+    "domain": "docs",
+    "problems": [
+      {
+        "rule": "DS101",
+        "type": "dangling link or anchor",
+        "message": "Dangling link target: ./x\u2066.md\n::error file=a::forged\u0007\u0000\u007f",
+        "value": null,
+        "severity": "error",
+        "line": 3,
+        "column": null,
+        "fault_class": "dangling_reference",
+        "tier": "deterministic",
+        "outcome": "rejected"
+      }
+    ]
+  },
+  {
+    "path": "docs/caf\u00e9 50%,a:b\u200b.md",
+    "bytes": 12,
+    "domain": "docs",
+    "problems": [
+      {
+        "rule": "DS102",
+        "type": "stray HTML comment",
+        "message": "Stray comment \u2028 100% \ufeff\u0085 \u200f end",
+        "value": null,
+        "severity": "warning",
+        "line": null,
+        "column": null,
+        "fault_class": "residual_markup",
+        "tier": "deterministic",
+        "outcome": "advisory"
+      }
+    ]
+  }
+]

@@ -1,0 +1,55 @@
+{
+  "schema_version": 2,
+  "profile": "deep",
+  "run": {
+    "model": null,
+    "notice": "1 deep rule(s) evaluated.",
+    "advisory": "Deep findings are heuristic candidates for review - they do not fail the build."
+  },
+  "summary": {
+    "documents": 2,
+    "documents_with_problems": 1,
+    "findings": 1,
+    "by_severity": {
+      "warning": 1
+    },
+    "by_rule": {
+      "DS301": 1
+    }
+  },
+  "rules": {
+    "enabled": [
+      "DS301"
+    ],
+    "evaluated": 0,
+    "opt_in_off": []
+  },
+  "documents": [
+    {
+      "path": "docs/install.md",
+      "bytes": 512,
+      "domain": "docs",
+      "problems": []
+    },
+    {
+      "path": "docs/upgrade.md",
+      "bytes": 640,
+      "domain": "docs",
+      "problems": [
+        {
+          "rule": "DS301",
+          "type": "fact-contradiction candidate",
+          "message": "Possible contradiction with docs/install.md:2: 'service requires Python 3.12' vs 'service requires Python 3.11'",
+          "value": null,
+          "severity": "warning",
+          "line": 5,
+          "column": null,
+          "fault_class": "contradiction_candidate",
+          "tier": "heuristic",
+          "outcome": "advisory"
+        }
+      ]
+    }
+  ],
+  "pending": []
+}

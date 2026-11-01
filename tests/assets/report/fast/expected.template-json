@@ -1,0 +1,85 @@
+{
+  "schema_version": 2,
+  "profile": "fast",
+  "run": {
+    "model": null,
+    "notice": "3 fast rule(s) evaluated.",
+    "advisory": null
+  },
+  "summary": {
+    "documents": 2,
+    "documents_with_problems": 2,
+    "findings": 3,
+    "by_severity": {
+      "error": 1,
+      "warning": 2
+    },
+    "by_rule": {
+      "DS101": 1,
+      "DS102": 1,
+      "DS103": 1
+    }
+  },
+  "rules": {
+    "enabled": [
+      "DS101",
+      "DS102",
+      "DS103"
+    ],
+    "evaluated": 0,
+    "opt_in_off": []
+  },
+  "documents": [
+    {
+      "path": "README.md",
+      "bytes": 120,
+      "domain": "docs",
+      "problems": [
+        {
+          "rule": "DS101",
+          "type": "dangling link or anchor",
+          "message": "Dangling link target: ./missing.md",
+          "value": null,
+          "severity": "error",
+          "line": 3,
+          "column": null,
+          "fault_class": "dangling_reference",
+          "tier": "deterministic",
+          "outcome": "rejected"
+        }
+      ]
+    },
+    {
+      "path": "docs/guide.md",
+      "bytes": 342,
+      "domain": "docs",
+      "problems": [
+        {
+          "rule": "DS102",
+          "type": "stray HTML comment",
+          "message": "Stray HTML comment",
+          "value": null,
+          "severity": "warning",
+          "line": 7,
+          "column": null,
+          "fault_class": "residual_markup",
+          "tier": "deterministic",
+          "outcome": "advisory"
+        },
+        {
+          "rule": "DS103",
+          "type": "unresolvable path-like code span",
+          "message": "Unresolvable path: scripts/run.sh",
+          "value": null,
+          "severity": "warning",
+          "line": null,
+          "column": null,
+          "fault_class": "unresolvable_path",
+          "tier": "deterministic",
+          "outcome": "advisory"
+        }
+      ]
+    }
+  ],
+  "pending": []
+}

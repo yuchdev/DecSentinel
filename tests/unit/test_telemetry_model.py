@@ -510,3 +510,35 @@ def test_default_domain_is_docs_per_fault_event_contract():
         - ``telemetry/classify.py`` and docs/specs/fault-event-contract.md
     """
     assert DEFAULT_DOMAIN == "docs"
+
+
+def test_inventory_repeats_the_scan_documents_exactly():
+    """
+    [Unit] report model: verifies ``inventory`` is ``result.documents`` verbatim, without appended paths.
+
+    Scenario:
+        Given a result whose finding names a path outside the inventory
+        When the context is built
+        Then ``documents`` gains the outside path but ``inventory`` lists only the scanned documents,
+        in order, as ``{path, bytes}`` records, and its schema tags the path untrusted.
+
+    Boundaries:
+        - Focus: the schema-1 ``json-v1`` documents source (Story 03.0 Task 01)
+        - Fixtures/params: inline result with a DS204-style ``src/calc.py`` finding
+        - Scope: ``ReportModel.build`` only
+
+    On failure, first check:
+        - Whether ``inventory`` was derived from the grouped ``documents`` instead of ``result.documents``
+    """
+    outside = Finding(rule="DS204", path="src/calc.py", message="bad docstring", severity="error", line=1)
+
+    context = ReportModel.build(_result((_DS101, outside)), Config())
+
+    assert context["inventory"] == [
+        {"path": "a.md", "bytes": 1},
+        {"path": "b.md", "bytes": 2},
+        {"path": "c.md", "bytes": 3},
+    ]
+    assert [entry["path"] for entry in context["documents"]][-1] == "src/calc.py"
+    assert CONTEXT_SCHEMA["inventory"].fields["path"].trust == UNTRUSTED
+    assert CONTEXT_SCHEMA["inventory"].fields["bytes"].trust == TRUSTED

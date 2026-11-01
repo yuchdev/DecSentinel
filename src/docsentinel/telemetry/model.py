@@ -105,6 +105,12 @@ DOCUMENT_SCHEMA: Final[Mapping[str, Variable]] = _frozen(
     }
 )
 
+#: Members of an ``inventory`` element: exactly the legacy ``ScanResult.documents``
+#: record, for the schema-1 ``json-v1`` template (no appended out-of-inventory entry).
+INVENTORY_SCHEMA: Final[Mapping[str, Variable]] = _frozen(
+    {"path": Variable("str", UNTRUSTED), "bytes": Variable("int", TRUSTED)}
+)
+
 #: Members of an ``opt_in_off`` element.
 OPT_IN_SCHEMA: Final[Mapping[str, Variable]] = _frozen(
     {"code": Variable("str", TRUSTED), "option": Variable("str", TRUSTED)}
@@ -137,6 +143,7 @@ CONTEXT_SCHEMA: Final[Mapping[str, Variable]] = _frozen(
         "documents": Variable("list[document]", None, DOCUMENT_SCHEMA),
         "documents_with_problems": Variable("list[document]", None, DOCUMENT_SCHEMA),
         "findings": Variable("list[problem]", None, FLAT_PROBLEM_SCHEMA),
+        "inventory": Variable("list[object]", None, INVENTORY_SCHEMA),
         "run": Variable("object", None, RUN_SCHEMA, opt_in=True),
     }
 )
@@ -212,7 +219,9 @@ class ReportModel:
         ``problems`` attached by path (``[]`` for a clean document); a finding whose
         path is not in the inventory gets an appended document entry with
         ``bytes = None`` so no finding is ever dropped from a document-grouped report.
-        Problems keep the order of ``result.findings``.
+        Problems keep the order of ``result.findings``. ``inventory`` repeats
+        ``result.documents`` verbatim as ``{path, bytes}`` records, so the schema-1
+        ``json-v1`` template can reproduce the legacy ``documents`` list exactly.
 
         :param result: The completed scan.
         :param config: The effective scan configuration.
@@ -270,6 +279,7 @@ class ReportModel:
             "documents": document_list,
             "documents_with_problems": with_problems,
             "findings": flat,
+            "inventory": [{"path": document.path, "bytes": document.bytes} for document in result.documents],
         }
         if report_include_run_meta:
             context["run"] = {"generated_at": utc_now_iso(), "id": uuid.uuid4().hex}

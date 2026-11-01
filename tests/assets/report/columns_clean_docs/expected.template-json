@@ -1,0 +1,121 @@
+{
+  "schema_version": 2,
+  "profile": "fast",
+  "run": {
+    "model": null,
+    "notice": "3 fast rule(s) evaluated; opt-in rule(s) not enabled: DS110 (set require_fence_languages).",
+    "advisory": null
+  },
+  "summary": {
+    "documents": 3,
+    "documents_with_problems": 2,
+    "findings": 5,
+    "by_severity": {
+      "error": 3,
+      "warning": 2
+    },
+    "by_rule": {
+      "DS101": 3,
+      "DS102": 1,
+      "DS103": 1
+    }
+  },
+  "rules": {
+    "enabled": [
+      "DS101",
+      "DS102",
+      "DS103",
+      "DS110"
+    ],
+    "evaluated": 3,
+    "opt_in_off": [
+      {
+        "code": "DS110",
+        "option": "require_fence_languages"
+      }
+    ]
+  },
+  "documents": [
+    {
+      "path": "README.md",
+      "bytes": 200,
+      "domain": "docs",
+      "problems": [
+        {
+          "rule": "DS101",
+          "type": "dangling link",
+          "message": "dangling link -> /docs/adr/README.md",
+          "value": "/docs/adr/README.md",
+          "severity": "error",
+          "line": 5,
+          "column": 10,
+          "fault_class": "dangling_reference",
+          "tier": "deterministic",
+          "outcome": "rejected"
+        },
+        {
+          "rule": "DS101",
+          "type": "dangling link",
+          "message": "dangling link -> /docs/adr/README.md",
+          "value": "/docs/adr/README.md",
+          "severity": "error",
+          "line": 5,
+          "column": 45,
+          "fault_class": "dangling_reference",
+          "tier": "deterministic",
+          "outcome": "rejected"
+        },
+        {
+          "rule": "DS103",
+          "type": "unresolvable path",
+          "message": "Unresolvable path: scripts/run.sh",
+          "value": "scripts/run.sh",
+          "severity": "warning",
+          "line": null,
+          "column": 7,
+          "fault_class": "unresolvable_path",
+          "tier": "deterministic",
+          "outcome": "advisory"
+        }
+      ]
+    },
+    {
+      "path": "docs/clean.md",
+      "bytes": 50,
+      "domain": "docs",
+      "problems": []
+    },
+    {
+      "path": "docs/z.md",
+      "bytes": 300,
+      "domain": "docs",
+      "problems": [
+        {
+          "rule": "DS101",
+          "type": "dangling link",
+          "message": "dangling link -> ./gone.md",
+          "value": "./gone.md",
+          "severity": "error",
+          "line": 4,
+          "column": 12,
+          "fault_class": "dangling_reference",
+          "tier": "deterministic",
+          "outcome": "rejected"
+        },
+        {
+          "rule": "DS102",
+          "type": "stray html comment",
+          "message": "Stray HTML comment",
+          "value": null,
+          "severity": "warning",
+          "line": 9,
+          "column": 1,
+          "fault_class": "residual_markup",
+          "tier": "deterministic",
+          "outcome": "advisory"
+        }
+      ]
+    }
+  ],
+  "pending": []
+}

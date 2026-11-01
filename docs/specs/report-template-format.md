@@ -218,6 +218,7 @@ The loader validates every reference against this schema. Each variable carries 
 | `model` | str or null (`generated_by_model`) | trusted |
 | `documents`, `documents_with_problems` | list[document] | -- |
 | `findings` | flat list[problem] (each carrying its `document_path`) | -- |
+| `inventory` | list[{`path`, `bytes`}]: the scanned documents exactly as in schema 1, without the entries `documents` appends for finding paths outside the inventory (used by `json-v1`) | `path` **untrusted**, `bytes` trusted |
 | `run.generated_at`, `run.id` | str | trusted, **opt-in only** |
 
 ### Document

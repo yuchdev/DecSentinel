@@ -1,0 +1,60 @@
+{
+  "template_version": 1,
+  "name": "text",
+  "type": "text",
+  "description": "Human-readable report: findings directly under their document, clean documents hidden.",
+  "requires_extensions": [],
+  "output": { "join": "\n", "trailing_newline": false, "sink": "terminal" },
+  "lines": [
+    { "type": "line", "text": "Schema version: {schema_version}", "variables_used": ["schema_version"] },
+    { "type": "line", "text": "Profile: {profile}", "variables_used": ["profile"] },
+    {
+      "type": "line",
+      "text": "Documents: {documents_count} ({documents_with_problems_count} with problems)",
+      "variables_used": ["documents_count", "documents_with_problems_count"]
+    },
+    { "type": "line", "text": "Enabled rules: {enabled_rules|json}", "variables_used": ["enabled_rules"] },
+    { "type": "line", "text": "{notice}", "variables_used": ["notice"] },
+    { "type": "line", "when": { "var": "advisory", "truthy": true }, "text": "{advisory}", "variables_used": ["advisory"] },
+    {
+      "type": "loop",
+      "over": "documents_with_problems",
+      "as": "doc",
+      "placement": "block",
+      "body": [
+        {
+          "type": "line",
+          "when": { "var": "doc.bytes", "ne": null },
+          "text": "{doc.path|neutralize} ({doc.bytes} bytes)",
+          "variables_used": ["doc.path", "doc.bytes"]
+        },
+        {
+          "type": "line",
+          "when": { "var": "doc.bytes", "eq": null },
+          "text": "{doc.path|neutralize}",
+          "variables_used": ["doc.path"]
+        },
+        {
+          "type": "loop",
+          "over": "doc.problems",
+          "as": "p",
+          "placement": "block",
+          "body": [
+            {
+              "type": "line",
+              "text": "  {p.severity}: {doc.path|neutralize}: {p.message|neutralize}",
+              "variables_used": ["p.severity", "doc.path", "p.message"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "loop",
+      "over": "pending",
+      "as": "reason",
+      "placement": "block",
+      "body": [{ "type": "line", "text": "Pending: {reason|neutralize}", "variables_used": ["reason"] }]
+    }
+  ]
+}

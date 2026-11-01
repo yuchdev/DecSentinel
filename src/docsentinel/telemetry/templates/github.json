@@ -1,0 +1,160 @@
+{
+  "template_version": 1,
+  "name": "github",
+  "type": "text",
+  "description": "GitHub Actions workflow-command annotations, one per problem, in document order.",
+  "requires_extensions": [],
+  "output": {
+    "join": "\n",
+    "trailing_newline": false,
+    "sink": "github"
+  },
+  "lines": [
+    {
+      "type": "loop",
+      "over": "documents_with_problems",
+      "as": "doc",
+      "placement": "block",
+      "body": [
+        {
+          "type": "loop",
+          "over": "doc.problems",
+          "as": "p",
+          "placement": "block",
+          "body": [
+            {
+              "type": "group",
+              "when": {
+                "var": "p.severity",
+                "eq": "error"
+              },
+              "body": [
+                {
+                  "type": "group",
+                  "when": {
+                    "var": "p.line",
+                    "eq": null
+                  },
+                  "body": [
+                    {
+                      "type": "line",
+                      "text": "::error file={doc.path|gha_property},title={p.rule|gha_property}::{p.message|gha_data}",
+                      "variables_used": [
+                        "doc.path",
+                        "p.rule",
+                        "p.message"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "group",
+                  "when": {
+                    "var": "p.line",
+                    "ne": null
+                  },
+                  "body": [
+                    {
+                      "type": "line",
+                      "when": {
+                        "var": "p.column",
+                        "eq": null
+                      },
+                      "text": "::error file={doc.path|gha_property},line={p.line|gha_property},title={p.rule|gha_property}::{p.message|gha_data}",
+                      "variables_used": [
+                        "doc.path",
+                        "p.line",
+                        "p.rule",
+                        "p.message"
+                      ]
+                    },
+                    {
+                      "type": "line",
+                      "when": {
+                        "var": "p.column",
+                        "ne": null
+                      },
+                      "text": "::error file={doc.path|gha_property},line={p.line|gha_property},col={p.column|gha_property},title={p.rule|gha_property}::{p.message|gha_data}",
+                      "variables_used": [
+                        "doc.path",
+                        "p.line",
+                        "p.column",
+                        "p.rule",
+                        "p.message"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "group",
+              "when": {
+                "var": "p.severity",
+                "ne": "error"
+              },
+              "body": [
+                {
+                  "type": "group",
+                  "when": {
+                    "var": "p.line",
+                    "eq": null
+                  },
+                  "body": [
+                    {
+                      "type": "line",
+                      "text": "::warning file={doc.path|gha_property},title={p.rule|gha_property}::{p.message|gha_data}",
+                      "variables_used": [
+                        "doc.path",
+                        "p.rule",
+                        "p.message"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "group",
+                  "when": {
+                    "var": "p.line",
+                    "ne": null
+                  },
+                  "body": [
+                    {
+                      "type": "line",
+                      "when": {
+                        "var": "p.column",
+                        "eq": null
+                      },
+                      "text": "::warning file={doc.path|gha_property},line={p.line|gha_property},title={p.rule|gha_property}::{p.message|gha_data}",
+                      "variables_used": [
+                        "doc.path",
+                        "p.line",
+                        "p.rule",
+                        "p.message"
+                      ]
+                    },
+                    {
+                      "type": "line",
+                      "when": {
+                        "var": "p.column",
+                        "ne": null
+                      },
+                      "text": "::warning file={doc.path|gha_property},line={p.line|gha_property},col={p.column|gha_property},title={p.rule|gha_property}::{p.message|gha_data}",
+                      "variables_used": [
+                        "doc.path",
+                        "p.line",
+                        "p.column",
+                        "p.rule",
+                        "p.message"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
