@@ -9,7 +9,7 @@
 |---|---|---|---|
 | 01.0 | Telemetry package and report model | ✅ Complete (2/2 tasks) | Full suite 2679 passed, 9 skipped; self-scan exit 0; `uv build` ok; feature-reviewer LGTM; task-verifier PARTIAL (no blocking gaps, see notes) |
 | 02.0 | Template engine | ✅ Complete (2/2 tasks) | Full suite 3055 passed, 9 skipped, 1 load-induced timing flake (`test_root_times_n_workload_fails`, passes alone); self-scan 0; `uv build` ok; task-verifier PASS, feature-reviewer LGTM, security-auditor PASS_WITH_FOLLOWUP |
-| 03.0 | Standard templates and cutover | 🔶 In progress (1/2 tasks) | Task 01: five packaged templates + goldens; targeted 466 passed; full suite 3112 passed before the last fix (2 golden failures were mid-edit, resolved); task-verifier PASS-with-notes, security-auditor PASS |
+| 03.0 | Standard templates and cutover | ✅ Complete (2/2 tasks) | Full suite 3197 passed, 14 skipped (5 deep-profile CLI cases skip: spaCy model not installed here); self-scan 0; `uv build` ok; task-verifier PASS, security-auditor PASS, feature-reviewer findings answered (consumer migration) |
 | 04.0 | Extensions | ⬜ Not started | — |
 | 05.0 | Tests, docs, acceptance | ⬜ Not started | — |
 
@@ -62,3 +62,19 @@
 
 **Follow-ups for later stories:** (a) Story 03.0: delete the duplicated originals in `reporting.py`; R4 invisible characters outside the neutralize table (soft hyphen, U+2060-2064, tag characters, Hangul fillers) change legacy output and parity tests together; the shipped `github.json` must obey the well-formed-command rule (literal command per severity branch, `gha_property` before the second `::`, `gha_data` after); the step cap (not `MAX_ITERATIONS`) is now the effective size limit, re-measure on the 358-document corpus (about 120k steps for 5000 findings); (b) R8 (LOW): encode very long context strings in slices; (c) Story 04.0: tag `ext.*` and `telemetry_domains` values untrusted; (d) Story 05.0: severity-routing and cap tests exist, add the CanonixEngine-scale performance run.
 - 2026-11-01: Story 03.0 Task 01 done (`524a97c`, `30bf6e4`, `14c58d1`): five templates under `telemetry/templates/`; `json-v1` byte-equals the Story 01.0 snapshots; DS101 duplicate-annotation observation resolved (two links to one target on one line, DS101 reports both at distinct columns, pinned by a test). Deviations: `text.json` prints the scan's own `{notice}` (templates cannot add numbers; same bytes as legacy), `github.json` always emits `title=` and `col=` only with `line`, `domain` is the literal `"docs"` until Story 04.0 (switch to `$var` + `$default`), new `inventory` model variable, `RULE_TITLES` table in `classify.py` makes `type` independent of detector load state (pinned to the registry by a test), document counts are inventory-only. Open INFO items: `RULE_TITLES` could be a `MappingProxyType`; lone surrogates in JSON come out as `\udXXX` escapes as in schema 1. Step use at 358 docs/5000 findings: github ~106k, json ~62k, text ~38k, json-v1 ~36k of 2,000,000.
+
+### Story 03.0 - Standard templates and cutover (✅ 2026-11-01)
+
+**Delivered**
+- Five packaged templates (`text`, `github`, `json`, `json-v1`, `json-documents`) under `telemetry/templates/`, each with goldens; `json-v1` byte-equals the Story 01.0 snapshots.
+- `reporting.render()` is a thin shim over `ReportModel` + engine (no format branch, no literal); old escape helpers deleted; `neutralize_text` re-exported; AST hardcode-ban tripwire with an injection self-test.
+- CLI: free-form `--format` validated after config (error lists valid names, exit 2), `--template PATH`, `--show-clean-documents`, `doctor` lists templates; config `report_templates_dir`, `report_show_clean_documents`, `report_include_run_meta`.
+- Deterministic `type` (`RULE_TITLES` table pinned to the registry) and inventory-only document counts; `available_templates` entry cap (C1).
+- In-repo consumers migrated to `json-v1`; user docs (`report.md`, `cli.md`, `statistical-checks.md`, `configuration.md`) describe the new formats with a migration section.
+- Decision D1 applied: default `--format json` is schema 2.
+
+**Tests / gate:** 3055 -> 3197 passed; self-scan 0; `uv build` ok; DS101 duplicate-annotation observation resolved (two links per line, distinct columns).
+
+**Reconciliation:** both task specs consumed; supersets: `render()` takes keyword-only `root`/`strict`/`template`; `show_clean_documents` and `inventory` context variables; `--format` validation after config instead of argparse `choices`; `TYPE_TEXT`/`TYPE_JSON` constants in `engine.py`; `domain` literal `"docs"` and `{notice}` until Story 04.0. Spec item 5 (minor version bump) moved to Story 05.0 with the release notes.
+
+**Follow-ups:** (a) Story 05.0: version bump, release notes, migration line (`--format json-v1`); update the owner-modified `README.md`, `docs/user/tutorial/README.md`, `examples/docsentinel.toml` and `.claude/agents/docs-reviewer.md` line 19 (still `--format json`); (b) a bad `report_templates_dir` fails every scan, even `--format text` (fail-closed); consider skipping the listing for packaged names; (c) `doctor` reads the current directory's config, not `--config`; (d) test gaps: `--format` with `--baseline`/`--strict` end to end, `doctor` with an escaping or symlinked `report_templates_dir`; (e) the two `_gha_level` tests now assert through `render()` (weaker for unknown severity); (f) the deep-profile CLI cases are skipped without the spaCy model, run them where it is installed.
