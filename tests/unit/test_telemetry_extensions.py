@@ -1600,3 +1600,136 @@ def test_event_guard_checks_modules_even_when_sys_modules_keeps_its_size(tmp_pat
     with pytest.raises(ExtensionError, match="module ds_n3_victim was imported during the run"):
         EventHookGuard(loaded, warn=warnings.append).problem_ext({"rule": "DS101"}, {"path": "a.md"}, {})
     assert warnings == []
+
+
+# --------------------------------------------------------------------------- third re-verification F4 (2026-11-03)
+
+
+class _InterruptSubclass(KeyboardInterrupt):
+    """A ``KeyboardInterrupt`` subclass an extension can define and raise (finding F4)."""
+
+
+def _raise_interrupt_subclass(*args: Any) -> Any:
+    raise _InterruptSubclass("planted")
+
+
+def test_keyboard_interrupt_subclass_from_a_report_hook_is_a_hook_failure():
+    """
+    [Unit] extensions: verifies a KeyboardInterrupt subclass from a hook is wrapped, not propagated (M17, F4).
+
+    Scenario:
+        Given a run hook raising a KeyboardInterrupt subclass
+        When the model is built
+        Then an ExtensionError names the hook and the subclass; the interrupt does not escape.
+
+    Boundaries:
+        - Focus: third re-verification finding F4 (only an exact KeyboardInterrupt propagates)
+        - Fixtures/params: none
+        - Scope: ReportModel.build -> extensions._call
+
+    On failure, first check:
+        - the ``type(exc) is KeyboardInterrupt`` test in ``extensions._call``
+    """
+    with pytest.raises(ExtensionError, match="provide_run failed: _InterruptSubclass: planted"):
+        _build(_ext(provide_run=_raise_interrupt_subclass))
+
+
+def test_keyboard_interrupt_subclass_from_an_event_hook_is_swallowed_with_a_warning():
+    """
+    [Unit] extensions: verifies the event guard treats a KeyboardInterrupt subclass as a hook failure (M29, F4).
+
+    Scenario:
+        Given a problem hook raising a KeyboardInterrupt subclass, and a healthy extension
+        When the event guard runs twice
+        Then one warning names the failing extension, the healthy data is returned and nothing escapes.
+
+    Boundaries:
+        - Focus: third re-verification finding F4 on the event path
+        - Fixtures/params: none
+        - Scope: EventHookGuard.problem_ext
+
+    On failure, first check:
+        - ``extensions._call``
+    """
+    loaded = admit_extensions(
+        [_ext("bad", provide_problem=_raise_interrupt_subclass), _ext("good", provide_problem=lambda p, d, m: {"k": 1})]
+    )
+    warnings: list[str] = []
+    guard = EventHookGuard(loaded, warn=warnings.append)
+
+    results = [guard.problem_ext({"rule": "DS101"}, {"path": "a.md"}, {}) for _ in range(2)]
+
+    assert results == [{"good": {"k": 1}}] * 2
+    assert len(warnings) == 1 and "bad" in warnings[0] and "_InterruptSubclass" in warnings[0]
+
+
+def test_keyboard_interrupt_subclass_from_a_filter_is_a_template_error():
+    """
+    [Unit] extensions: verifies an extension filter raising a KeyboardInterrupt subclass is a filter failure (M10, F4).
+
+    Scenario:
+        Given a bound filter raising a KeyboardInterrupt subclass, and one raising an exact KeyboardInterrupt
+        When each is applied
+        Then the subclass is a bounded TemplateError, while the exact KeyboardInterrupt still propagates.
+
+    Boundaries:
+        - Focus: third re-verification finding F4; exact KeyboardInterrupt as the edge case
+        - Fixtures/params: none
+        - Scope: BoundFilter.__call__
+
+    On failure, first check:
+        - the ``type(exc) is KeyboardInterrupt`` test in ``BoundFilter.__call__``
+    """
+    subclass = extensions.BoundFilter("ext.calc.f", "calc", _raise_interrupt_subclass, 0, frozenset({"scalar"}))
+    with pytest.raises(filters.TemplateError, match="filter ext.calc.f failed: _InterruptSubclass"):
+        subclass("x", ())
+
+    def exact(*args: Any) -> Any:
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt) as caught:
+        extensions.BoundFilter("ext.calc.g", "calc", exact, 0, frozenset({"scalar"}))("x", ())
+    assert type(caught.value) is KeyboardInterrupt
+
+
+class _InterruptingName:
+    """An extension whose ``name`` attribute raises a KeyboardInterrupt subclass."""
+
+    @property
+    def name(self) -> str:
+        raise _InterruptSubclass("name")
+
+
+class _InterruptingStr(Exception):
+    """An exception whose ``__str__`` raises a KeyboardInterrupt subclass."""
+
+    def __str__(self) -> str:
+        raise _InterruptSubclass("str")
+
+
+def _raise_interrupting_str(*args: Any) -> Any:
+    raise _InterruptingStr()
+
+
+def test_keyboard_interrupt_subclass_from_an_attribute_or_message_read_is_wrapped():
+    """
+    [Unit] extensions: verifies a KeyboardInterrupt subclass from ``name`` or ``str(exc)`` cannot escape (M17, M27, F4).
+
+    Scenario:
+        Given an extension whose ``name`` property raises a KeyboardInterrupt subclass, and a run hook raising
+            an exception whose ``__str__`` raises one
+        When the extension is admitted / the model is built
+        Then an ExtensionError is raised (the message reads ``<unprintable>`` for the second), never the interrupt.
+
+    Boundaries:
+        - Focus: third re-verification finding F4 applied to ``_lookup`` and ``_describe``
+        - Fixtures/params: none
+        - Scope: admit_extensions, ReportModel.build
+
+    On failure, first check:
+        - ``extensions._lookup`` and ``extensions._describe``
+    """
+    with pytest.raises(ExtensionError, match="reading name failed: _InterruptSubclass"):
+        admit_extensions([_InterruptingName()])
+    with pytest.raises(ExtensionError, match="provide_run failed: _InterruptingStr: <unprintable>"):
+        _build(_ext(provide_run=_raise_interrupting_str))

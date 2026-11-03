@@ -175,7 +175,9 @@ def _python_extensions_allowed(flag: bool) -> bool:
     return flag is True or os.environ.get(ALLOW_PYTHON_EXTENSIONS_ENV) == "1"
 
 
-def _report_extensions(specs: list[str], settings: Config, root: Path, *, allow_python: bool) -> LoadedExtensions:
+def _report_extensions(
+    specs: list[str], settings: Config, root: Path, *, allow_python: bool, origin_root: Path
+) -> LoadedExtensions:
     """Resolve the report extensions before the template and the scan (M30).
 
     Config entries come first (builtin only), then the ``--extension`` specs in
@@ -184,13 +186,24 @@ def _report_extensions(specs: list[str], settings: Config, root: Path, *, allow_
 
     :param specs: The ``--extension`` values.
     :param settings: The effective configuration.
-    :param root: The scan root directory (refused as a module origin, M6).
+    :param root: The resolved scan root directory (refused as a module origin, M6).
     :param allow_python: The gate decision.
+    :param origin_root: The scan root directory as given on the command line,
+        absolute but unresolved; anchored too, so a root that is a symlink out of
+        the checkout cannot drop the checkout from the M6 boundary (amended
+        2026-11-03, F1).
     :returns: The validated registry.
     :raises ConfigError: For a non-builtin ``telemetry_extensions`` entry.
     :raises ExtensionError: For a refused, unknown, duplicate or failing extension.
     """
-    return resolve_extensions(tuple(specs), config=settings, allow_python=allow_python, root=root, cwd=Path.cwd())
+    return resolve_extensions(
+        tuple(specs),
+        config=settings,
+        allow_python=allow_python,
+        root=root,
+        cwd=Path.cwd(),
+        origin_roots=(origin_root,),
+    )
 
 
 def _doctor_extension_lines() -> list[str]:
@@ -439,6 +452,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     try:
         target = Path(args.root).resolve()
         directory = target.parent if target.is_file() else target
+        # M6 (F1): the unresolved spelling keeps the checkout in the extension boundary
+        # when the root (or a root file) is a symlink pointing out of it.
+        given = Path(os.path.abspath(args.root))
+        origin_directory = given.parent if target.is_file() else given
         settings = load_config(directory, args.config)
         changes = {}
         if args.profile is not None:
@@ -457,7 +474,9 @@ def main(argv: Optional[list[str]] = None) -> int:
             settings = replace(settings, **changes)
         # M30 order: gate and resolve extensions -> template -> requires check -> scan.
         allow_python = _python_extensions_allowed(args.allow_python_extensions)
-        loaded = _report_extensions(args.extensions, settings, directory, allow_python=allow_python)
+        loaded = _report_extensions(
+            args.extensions, settings, directory, allow_python=allow_python, origin_root=origin_directory
+        )
         if loaded.builtin_specs != settings.telemetry_extensions:
             settings = replace(settings, telemetry_extensions=loaded.builtin_specs)
         template = _report_template(args.format, args.template, settings, directory)

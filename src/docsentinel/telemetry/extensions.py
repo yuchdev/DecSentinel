@@ -26,11 +26,16 @@ Selection and trust gate:
 * **M6** -- the boundary is the scan root, its project roots (every ancestor
   holding a :data:`PROJECT_ROOT_MARKERS` entry, not only the nearest, so a marker
   planted under ``<checkout>/docs`` cannot drop the checkout) and the current
-  directory. Before any import, a ``sys.path`` entry (``''`` is the cwd) inside the
-  boundary refuses every ``python:`` spec; the same ``sys.path`` check runs again
-  after every factory, before every report hook and at every :class:`ModuleWatch`
-  check, so an extension that adds the checkout to ``sys.path`` fails the run
-  before a later import can resolve through it. Every dotted prefix of the module
+  directory. The scan root is anchored in every spelling the invoker supplied: the
+  CLI passes the unresolved absolute argument (``origin_roots``) next to the
+  resolved one, so a ``<checkout>/docs`` that is a symlink out of the checkout
+  cannot drop the checkout (amended 2026-11-03, F1). Before any import, a
+  ``sys.path`` entry (``''`` is the cwd) inside the boundary refuses every
+  ``python:`` spec; the same ``sys.path`` check runs again after every factory,
+  between each factory and its ``filters()`` hook, before every report hook, before
+  every extension filter call (amended 2026-11-03, F2) and at every
+  :class:`ModuleWatch` check, so an extension that adds the checkout to
+  ``sys.path`` fails the run before a later import can resolve through it. Every dotted prefix of the module
   is resolved with ``importlib.util.find_spec`` (or read from an existing
   ``sys.modules`` entry) and refused when any origin or search location lies
   inside, or when it has no location and is not a builtin or frozen module. After
@@ -63,7 +68,8 @@ Data contract:
 * **M25/M26** -- builtin names are reserved against ``python:`` extensions; names and
   specs are unique; returned trees are attached only under ``ext.<name>``.
 * **M17/M27/M29** -- a hook's ``Exception`` or ``SystemExit`` becomes an
-  :class:`ExtensionError` on the report path (``KeyboardInterrupt`` propagates) and
+  :class:`ExtensionError` on the report path (only an exact ``KeyboardInterrupt``
+  propagates; a subclass is wrapped like any other exception, amended 2026-11-03) and
   is swallowed with one warning per extension by :class:`EventHookGuard`. Messages
   echo only the spec or name, the hook, the exception ``__qualname__`` and at most
   200 characters of ``str(exc)``, each neutralized, capped at 512 characters.
@@ -92,7 +98,7 @@ import sys
 import sysconfig
 import types
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Final, Literal, Optional, Protocol, Union, runtime_checkable
@@ -248,7 +254,9 @@ def _qualname(exc: BaseException) -> str:
 
     The read itself is guarded: a metaclass whose ``__qualname__`` raises (even
     ``SystemExit``) yields the fixed label ``<exception>`` instead of escaping.
-    ``KeyboardInterrupt`` propagates, as everywhere in this module.
+    Only an exact ``KeyboardInterrupt`` propagates, as everywhere in this module; a
+    subclass (which extension code can define and raise) is handled like any other
+    exception.
 
     :param exc: The exception.
     :returns: The echo, or ``<exception>``.
@@ -256,9 +264,9 @@ def _qualname(exc: BaseException) -> str:
     try:
         qualname = getattr(type(exc), "__qualname__", None)
         return _echo(qualname, _MAX_QUALNAME) if isinstance(qualname, str) else "<exception>"
-    except KeyboardInterrupt:
-        raise
-    except BaseException:
+    except BaseException as exc:
+        if type(exc) is KeyboardInterrupt:
+            raise
         return "<exception>"
 
 
@@ -275,9 +283,9 @@ def _describe(exc: BaseException) -> str:
     try:
         detail = str(exc)
         text = _echo(detail, MAX_DETAIL_CHARS) if isinstance(detail, str) else ""
-    except KeyboardInterrupt:
-        raise
-    except BaseException:
+    except BaseException as exc:
+        if type(exc) is KeyboardInterrupt:
+            raise
         text = "<unprintable>"
     return f"{shown}: {text}" if text else shown
 
@@ -472,15 +480,21 @@ class _Boundary:
     sites: tuple[str, ...]
 
     @classmethod
-    def of(cls, root: Path, cwd: Path) -> _Boundary:
+    def of(cls, root: Path, cwd: Path, origin_roots: Sequence[Path] = ()) -> _Boundary:
         """Build the boundary for a scan root and a current directory.
 
         :param root: The scan root.
         :param cwd: The current directory.
+        :param origin_roots: Further spellings of the scan root as the invoker wrote
+            it (amended 2026-11-03, F1): each is an anchor and its marked ancestors
+            are project roots too, so a resolved root that left the checkout through
+            a symlink cannot drop the checkout from the boundary.
         :returns: The boundary.
         """
+        extra = [os.fspath(origin) for origin in origin_roots]
+        marked = [entry for start in (os.fspath(root), *extra) for entry in project_roots(Path(start))]
         anchors: dict[str, Optional[os.stat_result]] = {}
-        for anchor in (os.fspath(root), os.fspath(cwd), *project_roots(root)):
+        for anchor in (os.fspath(root), os.fspath(cwd), *extra, *marked):
             for spelling in _spellings(anchor):
                 if spelling in anchors:
                     continue
@@ -565,9 +579,9 @@ def _check_import_path(boundary: _Boundary, cwd: Path):
     """
     try:
         entries = [str.__str__(entry) for entry in list(sys.path) if isinstance(entry, str)]
-    except KeyboardInterrupt:
-        raise
-    except BaseException:
+    except BaseException as exc:
+        if type(exc) is KeyboardInterrupt:
+            raise
         raise ExtensionError("python extensions are refused: sys.path cannot be read") from None
     for entry in entries:
         candidates = [entry or os.curdir]
@@ -599,9 +613,11 @@ def _locations(values: object) -> list[object]:
             if len(entries) > _MAX_SEARCH_LOCATIONS:
                 raise ExtensionError("python extension refused: a package has too many search locations")
         return entries
-    except (ExtensionError, KeyboardInterrupt):
+    except ExtensionError:
         raise
-    except BaseException:
+    except BaseException as exc:
+        if type(exc) is KeyboardInterrupt:
+            raise
         raise ExtensionError("python extension refused: a package search path cannot be listed") from None
 
 
@@ -715,9 +731,9 @@ def _check_origins(module: str, boundary: _Boundary):
         else:
             try:
                 spec = importlib.util.find_spec(prefix)
-            except KeyboardInterrupt:
-                raise
             except BaseException as exc:
+                if type(exc) is KeyboardInterrupt:
+                    raise
                 raise ExtensionError(
                     f"python extension module {_echo(module)} could not be located: {_qualname(exc)}"
                 ) from None
@@ -736,7 +752,8 @@ class ModuleWatch:
     root, a project root or the current directory) on ``sys.path`` -- at import
     time, in its factory or in a hook -- fails the run (exit 2) before a later
     import can resolve through that entry. It runs at the start of every
-    :meth:`check`, after every factory and before every report hook.
+    :meth:`check`, after every factory, before every ``filters()`` hook, before
+    every report hook and before every extension filter call.
 
     **Detection:** a snapshot of ``sys.modules`` is taken before the first
     ``python:`` import; :meth:`check` compares the current ``sys.modules`` with it
@@ -765,14 +782,15 @@ class ModuleWatch:
         self._accepted_path: Optional[tuple[object, ...]] = None
 
     @classmethod
-    def start(cls, root: Path, cwd: Path) -> ModuleWatch:
+    def start(cls, root: Path, cwd: Path, origin_roots: Sequence[Path] = ()) -> ModuleWatch:
         """Start a watch for a scan root and a current directory.
 
         :param root: The scan root.
         :param cwd: The current directory.
+        :param origin_roots: Further spellings of the scan root (see :meth:`_Boundary.of`).
         :returns: The watch.
         """
-        return cls(_Boundary.of(root, cwd), cwd)
+        return cls(_Boundary.of(root, cwd, origin_roots), cwd)
 
     def changed(self) -> bool:
         """Return whether ``sys.modules`` changed size since the last snapshot.
@@ -791,9 +809,9 @@ class ModuleWatch:
         """
         try:
             return (os.getcwd(), *(str.__str__(entry) for entry in list(sys.path) if isinstance(entry, str)))
-        except KeyboardInterrupt:
-            raise
-        except BaseException:
+        except BaseException as exc:
+            if type(exc) is KeyboardInterrupt:
+                raise
             return None
 
     def check_path(self):
@@ -836,9 +854,9 @@ class ModuleWatch:
                 inside = isinstance(module, types.ModuleType) and any(
                     self._boundary.refuses(location) for location in _module_locations(module)
                 )
-            except KeyboardInterrupt:
-                raise
-            except BaseException:
+            except BaseException as exc:
+                if type(exc) is KeyboardInterrupt:
+                    raise
                 inside = True
             if inside:
                 raise ExtensionError(
@@ -851,7 +869,33 @@ class ModuleWatch:
 _MISSING_MODULE: Final[object] = object()
 
 
-def load_python_target(spec: str, *, allow_python: bool, root: Path, cwd: Path) -> object:
+def _origin_paths(origin_roots: object) -> tuple[Path, ...]:
+    """Validate the extra scan-root spellings of the M6 boundary (amended 2026-11-03).
+
+    :param origin_roots: A sequence of ``str``/``os.PathLike`` paths (not one path).
+    :returns: Absolute paths, lexically normalized and never resolved, so a symlink
+        the invoker named stays the spelling that is anchored.
+    :raises ExtensionError: For a single path, a non-sequence, too many entries or an
+        entry that is not a path.
+    """
+    if isinstance(origin_roots, (str, bytes, os.PathLike)) or not isinstance(origin_roots, Sequence):
+        raise ExtensionError("origin_roots must be a sequence of paths")
+    if len(origin_roots) > _MAX_SEARCH_LOCATIONS:
+        raise ExtensionError("too many origin_roots")
+    found: list[Path] = []
+    for entry in origin_roots:
+        if not isinstance(entry, (str, os.PathLike)):
+            raise ExtensionError("origin_roots must be a sequence of paths")
+        text = os.fspath(entry)
+        if not isinstance(text, str) or not text:
+            raise ExtensionError("origin_roots must be a sequence of paths")
+        found.append(Path(os.path.abspath(text)))
+    return tuple(found)
+
+
+def load_python_target(
+    spec: str, *, allow_python: bool, root: Path, cwd: Path, origin_roots: Sequence[Path] = ()
+) -> object:
     """Resolve a ``python:<module>:<callable>`` spec to its callable (M2, M3, M5, M6).
 
     The single shared ``importlib`` helper (Milestone 0007 extensions and the
@@ -866,6 +910,8 @@ def load_python_target(spec: str, *, allow_python: bool, root: Path, cwd: Path) 
         refuses. There is deliberately no default.
     :param root: The scan root; a module inside it or inside its project root is refused.
     :param cwd: The current directory; a module inside it is refused.
+    :param origin_roots: Further spellings of the scan root as the invoker wrote it
+        (unresolved), anchored like ``root`` (M6, amended 2026-11-03).
     :returns: The resolved callable (not yet called).
     :raises ExtensionError: When refused by the gate, the grammar, the ``sys.path``
         check or the origin check, or when the import or attribute lookup fails, or
@@ -880,15 +926,15 @@ def load_python_target(spec: str, *, allow_python: bool, root: Path, cwd: Path) 
     parsed = _parse_spec(spec)
     if parsed.kind != "python":
         raise ExtensionError(f"not a python extension spec: {_echo(spec)}")
-    boundary = _Boundary.of(root, cwd)
+    boundary = _Boundary.of(root, cwd, _origin_paths(origin_roots))
     _check_import_path(boundary, cwd)
     _check_origins(parsed.target, boundary)
     watch = ModuleWatch(boundary, cwd)
     try:
         module = importlib.import_module(parsed.target)
-    except KeyboardInterrupt:
-        raise
     except BaseException as exc:
+        if type(exc) is KeyboardInterrupt:
+            raise
         raise ExtensionError(
             f"python extension module {_echo(parsed.target)} could not be imported: {_qualname(exc)}"
         ) from None
@@ -898,9 +944,9 @@ def load_python_target(spec: str, *, allow_python: bool, root: Path, cwd: Path) 
     for segment in parsed.attribute.split("."):
         try:
             target = getattr(target, segment)
-        except KeyboardInterrupt:
-            raise
-        except BaseException:
+        except BaseException as exc:
+            if type(exc) is KeyboardInterrupt:
+                raise
             raise ExtensionError(f"python extension {_echo(spec)}: callable not found") from None
     if not callable(target):
         raise ExtensionError(f"python extension {_echo(spec)}: target is not callable")
@@ -919,6 +965,10 @@ class BoundFilter:
     :ivar function: The validated callable.
     :ivar arity: ``0`` or ``1``.
     :ivar input_kinds: Accepted input kinds.
+    :ivar guard: Called before every call of ``function``; bound by the registry to
+        :meth:`ModuleWatch.check_path` when a ``python:`` extension is loaded, so a
+        filter that put the checkout on ``sys.path`` fails the render before the
+        next filter call can import through it (M6, amended 2026-11-03, F2).
     """
 
     name: str
@@ -926,19 +976,25 @@ class BoundFilter:
     function: Callable[..., JsonScalar]
     arity: int
     input_kinds: frozenset[str]
+    guard: Optional[Callable[[], None]] = field(default=None, compare=False, repr=False)
 
     def __call__(self, value: JsonValue, args: tuple[str, ...]) -> JsonScalar:
         """Apply the filter at render time (M10).
 
         A container input is passed as a deep-frozen copy. The result must be an
-        exact JSON scalar; anything else, and any exception (``KeyboardInterrupt``
-        aside), is a bounded :class:`~docsentinel.telemetry.filters.TemplateError`.
+        exact JSON scalar; anything else, and any exception (an exact
+        ``KeyboardInterrupt`` aside; a subclass is wrapped), is a bounded
+        :class:`~docsentinel.telemetry.filters.TemplateError`. The :attr:`guard`
+        runs first, outside that wrapping: its :class:`ExtensionError` propagates
+        and is never turned into a filter failure.
 
         :param value: The JSON input.
         :param args: The literal arguments.
         :returns: The scalar result.
         :raises TemplateError: On a wrong argument count or input kind, a raising
             filter or a non-scalar result.
+        :raises ExtensionError: When the guard refuses (a ``sys.path`` entry inside
+            the M6 boundary).
         """
         if len(args) != self.arity:
             raise TemplateError(f"filter {_echo(self.name)} takes {self.arity} argument(s)")
@@ -946,11 +1002,13 @@ class BoundFilter:
         if kind not in self.input_kinds:
             raise TemplateError(f"filter {_echo(self.name)} cannot take a {kind} value")
         argument = freeze(value) if kind != "scalar" else value
+        if self.guard is not None:
+            self.guard()
         try:
             result = self.function(argument, *args)
-        except KeyboardInterrupt:
-            raise
         except BaseException as exc:
+            if type(exc) is KeyboardInterrupt:
+                raise
             raise TemplateError(f"filter {_echo(self.name)} failed: {_describe(exc)}") from None
         if not _is_exact_scalar(result):
             raise TemplateError(f"filter {_echo(self.name)} must return a JSON scalar")
@@ -1056,9 +1114,9 @@ def _lookup(obj: object, attribute: str, subject: str) -> Any:
     """
     try:
         return getattr(obj, attribute, None)
-    except KeyboardInterrupt:
-        raise
     except BaseException as exc:
+        if type(exc) is KeyboardInterrupt:
+            raise
         raise ExtensionError(f"extension {_echo(subject)}: reading {attribute} failed: {_describe(exc)}") from None
 
 
@@ -1158,6 +1216,8 @@ def _registry(
             raise ExtensionError(f"two extensions are named {extension.name}")
         names.add(extension.name)
         filters.update(own)
+    if watch is not None:
+        filters = {key: replace(bound, guard=watch.check_path) for key, bound in filters.items()}
     return LoadedExtensions(tuple(extension for extension, _ in admitted), MappingProxyType(filters), watch)
 
 
@@ -1186,6 +1246,7 @@ def resolve_extensions(
     allow_python: bool,
     root: Path,
     cwd: Path,
+    origin_roots: Sequence[Path] = (),
 ) -> LoadedExtensions:
     """Select, gate, import and validate the extensions of one run (M1-M6, M13, M25, M30).
 
@@ -1195,13 +1256,21 @@ def resolve_extensions(
     extension is resolved, so a refusal executes nothing. After every factory (and
     its ``filters()`` hook) the :class:`ModuleWatch` checks ``sys.path`` and
     ``sys.modules`` again, so a factory that adds the checkout to ``sys.path`` fails
-    the run before the next extension is imported or any hook runs (M6).
+    the run before the next extension is imported or any hook runs (M6). The same
+    check also runs between each factory and its ``filters()`` hook, and every
+    registered extension filter checks ``sys.path`` before each call (amended
+    2026-11-03, F2).
 
     :param specs: Invoker-supplied specs (``--extension``).
     :param config: The effective configuration.
     :param allow_python: The invoker's explicit gate decision (no default).
     :param root: The scan root, for the M6 origin check.
     :param cwd: The current directory, for the M6 origin check.
+    :param origin_roots: Further spellings of the scan root, as the invoker wrote it
+        (absolute but unresolved; the CLI passes ``os.path.abspath`` of its argument,
+        or its parent for a file). Each is anchored with its marked ancestors, so a
+        root that is a symlink out of the checkout cannot drop the checkout from the
+        boundary (M6, amended 2026-11-03).
     :returns: The registry.
     :raises ConfigError: When ``config.telemetry_extensions`` holds a non-builtin entry.
     :raises ExtensionError: For a malformed, unknown, duplicate or refused spec, a
@@ -1210,6 +1279,7 @@ def resolve_extensions(
     configured = validate_telemetry_extensions(config.telemetry_extensions)
     if isinstance(specs, (str, bytes)) or not isinstance(specs, Sequence):
         raise ExtensionError("extensions must be a sequence of extension specs")
+    origins = _origin_paths(origin_roots)
     ordered = (*configured, *specs)
     if len(ordered) > MAX_EXTENSIONS:
         raise ExtensionError(f"more than {MAX_EXTENSIONS} extensions")
@@ -1223,21 +1293,30 @@ def resolve_extensions(
         parsed.append(item)
     if allow_python is not True and any(item.kind == "python" for item in parsed):
         first = next(item for item in parsed if item.kind == "python")
-        load_python_target(first.text, allow_python=False, root=root, cwd=cwd)
+        load_python_target(first.text, allow_python=False, root=root, cwd=cwd, origin_roots=origins)
     for item in parsed:
         if item.kind == "builtin" and builtin.builtin_factory(item.target) is None:
             raise ExtensionError(f"unknown builtin extension: {_echo(item.text)}")
-    watch = ModuleWatch.start(root, cwd) if any(item.kind == "python" for item in parsed) else None
+    watch = ModuleWatch.start(root, cwd, origins) if any(item.kind == "python" for item in parsed) else None
     admitted = []
     for item in parsed:
         if item.kind == "builtin":
             factory = builtin.builtin_factory(item.target)
             instance = _call(item.text, "factory", factory)
-            admitted.append(_admit(instance, spec=item.text, is_builtin=True, expected=item.target))
         else:
-            target = load_python_target(item.text, allow_python=allow_python, root=root, cwd=cwd)
+            target = load_python_target(item.text, allow_python=allow_python, root=root, cwd=cwd, origin_roots=origins)
             instance = _call(item.text, "factory", target)
-            admitted.append(_admit(instance, spec=item.text, is_builtin=False))
+        if watch is not None:
+            # F2: sys.path (and sys.modules) before filters() runs inside _admit.
+            watch.check()
+        admitted.append(
+            _admit(
+                instance,
+                spec=item.text,
+                is_builtin=item.kind == "builtin",
+                expected=item.target if item.kind == "builtin" else None,
+            )
+        )
         if watch is not None:
             watch.check()
     return _registry(admitted, watch)
@@ -1543,7 +1622,9 @@ def _call(subject: str, hook: str, function: Callable[..., Any], *args: Any) -> 
     """Call one extension hook or factory; failures become :class:`ExtensionError` (M17).
 
     ``Exception`` and ``SystemExit`` (so ``SystemExit(0)`` cannot choose the exit
-    code) and every other ``BaseException`` except ``KeyboardInterrupt`` are wrapped.
+    code) and every other ``BaseException`` except an exact ``KeyboardInterrupt`` are
+    wrapped; a ``KeyboardInterrupt`` *subclass* is extension-defined and wrapped too
+    (amended 2026-11-03, F4), so it cannot escape the wrapping and the final M6 check.
 
     :param subject: The extension name or spec.
     :param hook: The hook name.
@@ -1554,9 +1635,9 @@ def _call(subject: str, hook: str, function: Callable[..., Any], *args: Any) -> 
     """
     try:
         return function(*args)
-    except KeyboardInterrupt:
-        raise
     except BaseException as exc:
+        if type(exc) is KeyboardInterrupt:
+            raise
         raise _hook_failure(subject, hook, exc) from None
 
 
@@ -1713,7 +1794,8 @@ class EventHookGuard:
     handled here: they happen in :func:`resolve_extensions` and are never swallowed
     (M4). Neither is a module-origin refusal (M6): ``sys.path`` is checked before
     every hook, and :meth:`ModuleWatch.check` runs unconditionally after each event's
-    hooks; their :class:`ExtensionError` propagates. ``KeyboardInterrupt`` propagates.
+    hooks; their :class:`ExtensionError` propagates. Only an exact
+    ``KeyboardInterrupt`` propagates; a hook raising a subclass is a hook failure.
     """
 
     def __init__(self, loaded: LoadedExtensions, *, warn: Callable[[str], None]):

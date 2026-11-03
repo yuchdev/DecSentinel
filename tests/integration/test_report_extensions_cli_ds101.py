@@ -354,6 +354,8 @@ _PLANTED_MARKERS = (
     "docsentinel.toml",
     "doc_sentinel.toml",
     "symlinked-root",
+    "link-out-dir",
+    "link-out-file",
 )
 
 
@@ -383,21 +385,30 @@ def test_marker_planted_under_docs_never_shrinks_the_boundary(
         Given a git checkout whose ``src/`` holds an extension that writes a sentinel on import, ``src/`` on sys.path
             (``PYTHONPATH=<repo>/src``), the cwd elsewhere, and ``docs/`` (the DS101 case) carrying a planted marker
             -- none, an empty ``.git`` file, a dangling ``.git`` link, ``pyproject.toml``, ``docsentinel.toml``,
-            ``doc_sentinel.toml``, or a ``.git`` file with the scan root given as a symlink to ``docs/``
+            ``doc_sentinel.toml``, or a ``.git`` file with the scan root given as a symlink to ``docs/``; or (third
+            re-verification F1, auditor fixture w14) ``<repo>/docs`` itself a symlink to a directory outside the
+            checkout, scanned as that directory or as a file inside it
         When ``docsentinel scan <root> --extension python:<ext>:make --allow-python-extensions`` runs
         Then it exits 2 before the scan, nothing is on stdout and the extension never ran.
 
     Boundaries:
-        - Focus: re-verification finding N1 (auditor repro w8, one row per marker)
+        - Focus: re-verification finding N1 (auditor repro w8, one row per marker) and third re-verification F1
+          (the CLI must anchor the unresolved root spelling, not only the resolved one)
         - Fixtures/params: one planted marker per case; ``none`` is the control
         - Scope: in-process CLI call
 
     On failure, first check:
         - ``extensions.project_roots`` (every marked ancestor, not the nearest)
+        - for ``link-out-*``: the ``origin_root`` the scan branch of ``cli.main`` passes to ``_report_extensions``
     """
     checkout = tmp_path_factory.mktemp("checkout")
     (checkout / ".git").mkdir()
-    docs = load_asset_case("ds101", "dangling_file_link", checkout / "docs").root
+    if planted.startswith("link-out"):
+        linked = load_asset_case("ds101", "dangling_file_link", tmp_path_factory.mktemp("linked") / "docs").root
+        os.symlink(linked, checkout / "docs")
+        docs = checkout / "docs"
+    else:
+        docs = load_asset_case("ds101", "dangling_file_link", checkout / "docs").root
     elsewhere = tmp_path_factory.mktemp("elsewhere")
     sentinel = tmp_path_factory.mktemp("sentinel") / "ran"
     name = f"ds_cli_company_ext_{planted.replace('-', '_').replace('.', '_')}"
@@ -412,11 +423,13 @@ def test_marker_planted_under_docs_never_shrinks_the_boundary(
         (docs / ".git").write_text("", encoding="utf-8")
     elif planted == "dangling-git-link":
         os.symlink(checkout / "does-not-exist", docs / ".git")
-    elif planted != "none":
+    elif planted not in ("none", "link-out-dir", "link-out-file"):
         (docs / planted).write_text("", encoding="utf-8")
     if planted == "symlinked-root":
         root = elsewhere / "link"
         os.symlink(docs, root)
+    elif planted == "link-out-file":
+        root = docs / "README.md"
     monkeypatch.syspath_prepend(str(checkout / "src"))
     monkeypatch.chdir(elsewhere)
 

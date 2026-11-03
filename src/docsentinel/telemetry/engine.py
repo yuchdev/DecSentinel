@@ -95,6 +95,7 @@ from typing import Any, Final, Optional, Union
 from docsentinel.telemetry.extensions import (
     EXT_FILTER_PREFIX,
     BoundFilter,
+    ExtensionError,
     LoadedExtensions,
     check_template,
     missing_extensions_message,
@@ -1097,6 +1098,8 @@ def render_template(
         kind of value, a context holding a reference cycle or a value that cannot be
         rendered (such as an int too long to print, R3), or a render past the M13
         caps (output, loop items, steps or filter-built characters, R5). Messages never echo context data.
+    :raises ExtensionError: When an extension filter's M6 ``sys.path`` guard refuses
+        (propagated unchanged, never turned into a filter or render failure).
     """
     if not isinstance(template, Template):
         raise TemplateError("render_template needs a validated Template")
@@ -1111,6 +1114,8 @@ def render_template(
             return renderer.json(template)
     except RecursionError:
         raise TemplateError("template nesting is too deep to render") from None
+    except ExtensionError:
+        raise
     except (ValueError, TypeError, OverflowError):
         raise TemplateError("the render context holds a value that cannot be rendered") from None
     raise TemplateError("unknown template type")
