@@ -23,16 +23,21 @@ Selection and trust gate:
   callable is reached by ``getattr`` over validated segments only, and
   ``builtin:<name>`` resolves through the static table of
   :mod:`docsentinel.telemetry.builtin` (the name is never part of an import).
-* **M6** -- the boundary is the scan root, its project root (the nearest ancestor
-  holding a :data:`PROJECT_ROOT_MARKERS` entry, so scanning ``<checkout>/docs``
-  still covers the checkout) and the current directory. Before any import, a
-  ``sys.path`` entry (``''`` is the cwd) inside the boundary refuses every
-  ``python:`` spec; then every dotted prefix of the module is resolved with
-  ``importlib.util.find_spec`` (or read from an existing ``sys.modules`` entry) and
-  refused when any origin or search location lies inside, or when it has no
-  location and is not a builtin or frozen module. After the import, the factories,
-  the report hooks and the render, a :class:`ModuleWatch` refuses (exit 2) when any
-  module added to ``sys.modules`` since the first ``python:`` import lies inside.
+* **M6** -- the boundary is the scan root, its project roots (every ancestor
+  holding a :data:`PROJECT_ROOT_MARKERS` entry, not only the nearest, so a marker
+  planted under ``<checkout>/docs`` cannot drop the checkout) and the current
+  directory. Before any import, a ``sys.path`` entry (``''`` is the cwd) inside the
+  boundary refuses every ``python:`` spec; the same ``sys.path`` check runs again
+  after every factory, before every report hook and at every :class:`ModuleWatch`
+  check, so an extension that adds the checkout to ``sys.path`` fails the run
+  before a later import can resolve through it. Every dotted prefix of the module
+  is resolved with ``importlib.util.find_spec`` (or read from an existing
+  ``sys.modules`` entry) and refused when any origin or search location lies
+  inside, or when it has no location and is not a builtin or frozen module. After
+  the import, the factories, the report hooks and the render, a
+  :class:`ModuleWatch` refuses (exit 2) when any module added to ``sys.modules``
+  since the first ``python:`` import reports a location inside (best-effort
+  detection of accidental imports).
   Exemption (amended 2026-11-03): a location whose absolute *and* canonical path
   are both under the running interpreter's own ``site-packages`` (``sysconfig``
   ``purelib``/``platlib``) is never refused, so a project-local ``.venv`` of the
@@ -71,7 +76,8 @@ full in-process code -- in particular, extensions run in selection order in one
 process, so one extension can alter shared state (``sys.modules``, the frozen
 model's backing dicts via ``gc``, module globals) that the next one sees (R1); a
 hook that never returns is not stopped (decision D-C); the M6 origin check is
-point-in-time, and :class:`ModuleWatch` detects a planted module only after it ran.
+point-in-time, and :class:`ModuleWatch` is best-effort detection of accidental
+imports, defeated by a planted module that rewrites its own location (R3).
 """
 
 from __future__ import annotations
@@ -143,8 +149,8 @@ _MAX_ECHO = 80
 _MAX_SEARCH_LOCATIONS = 64
 _MAX_ANCESTORS = 256
 
-#: Entries whose presence marks a project root: the nearest marked ancestor of the
-#: scan root (inclusive) is an M6 anchor too.
+#: Entries whose presence marks a project root: every marked ancestor of the scan
+#: root (inclusive) is an M6 anchor too (amended 2026-11-03: not only the nearest).
 PROJECT_ROOT_MARKERS: Final[tuple[str, ...]] = (".git", "docsentinel.toml", "doc_sentinel.toml", "pyproject.toml")
 
 _NAME_RE = re.compile(EXTENSION_NAME_PATTERN)
@@ -373,23 +379,37 @@ def _spellings(text: str) -> tuple[str, ...]:
 def _has_project_marker(directory: str) -> bool:
     """Return whether ``directory`` holds one of :data:`PROJECT_ROOT_MARKERS`.
 
+    Any entry counts (``lexists``: an empty file or a dangling link too). That is
+    safe only because :func:`project_roots` keeps every marked ancestor: an extra
+    marker can enlarge the boundary but never shrink it.
+
     :param directory: An absolute directory path.
-    :returns: ``True`` when a marker exists (``lexists``: a dangling link counts).
+    :returns: ``True`` when a marker exists.
     """
     return any(os.path.lexists(os.path.join(directory, marker)) for marker in PROJECT_ROOT_MARKERS)
 
 
 def project_roots(root: Path) -> tuple[str, ...]:
-    """Return the project root of a scan root: its nearest marked ancestor (M6).
+    """Return the project roots of a scan root: every marked ancestor (M6, amended 2026-11-03).
 
-    The scan root itself and then each parent is tested for a
-    :data:`PROJECT_ROOT_MARKERS` entry; the first match is the project root. Both
-    the absolute and the canonical spelling of ``root`` are walked, so each may
-    contribute one directory. Scanning ``<checkout>/docs`` therefore still anchors
-    the origin check at ``<checkout>``.
+    The scan root itself and then each parent, up to the filesystem root, is tested
+    for a :data:`PROJECT_ROOT_MARKERS` entry; **every** match is a project root, not
+    only the nearest. Both the absolute and the canonical spelling of ``root`` are
+    walked. The scanned repository controls the markers below its own top, so a
+    stray ``docs/.git`` (even an empty file or a dangling link), ``docs/pyproject.toml``
+    or a scan root that is a link to ``docs/`` can add a directory but can never
+    drop the checkout from the boundary. Scanning ``<checkout>/docs`` therefore
+    always anchors the origin check at ``<checkout>``.
+
+    This fails closed more often: a marker high up the tree (for example a
+    ``~/.git`` dotfiles repository) puts everything below it, the user site and a
+    user-installed interpreter included, inside the boundary, so ``python:``
+    extensions are refused there.
 
     :param root: The scan root.
     :returns: The project root spellings found (empty when no ancestor is marked).
+    :raises ExtensionError: When a spelling of ``root`` has more than
+        :data:`_MAX_ANCESTORS` ancestors (fail closed rather than stop early).
     """
     found: list[str] = []
     for start in _spellings(os.fspath(root)):
@@ -397,11 +417,12 @@ def project_roots(root: Path) -> tuple[str, ...]:
         for _ in range(_MAX_ANCESTORS):
             if _has_project_marker(current):
                 found.append(current)
-                break
             parent = os.path.dirname(current)
             if parent == current:
                 break
             current = parent
+        else:
+            raise ExtensionError("python extensions are refused: the scan root path is implausibly deep")
     return tuple(dict.fromkeys(found))
 
 
@@ -708,28 +729,40 @@ def _check_origins(module: str, boundary: _Boundary):
 
 
 class ModuleWatch:
-    """Detect modules imported during a run whose origin is inside the boundary (M6).
+    """Guard ``sys.path`` and watch ``sys.modules`` during a run (M6).
 
-    A snapshot of ``sys.modules`` is taken before the first ``python:`` import;
-    :meth:`check` compares the current ``sys.modules`` with it and refuses when an
-    added or replaced entry has a location inside the scan root, its project root
-    or the current directory (the running interpreter's own ``site-packages`` is
-    exempt). This catches an admitted extension that imports, at import time, in its
-    factory, in a hook or in a filter, a module planted in the checkout. It is
-    detection after the fact: the planted module has already run, but the run fails
-    with exit 2 instead of producing a report. Entries that are not modules, or that
-    carry no location, are skipped here (a module able to scrub its own location
-    has already executed; threat model R1/R3). Accepted entries are remembered, so
-    each new entry is inspected once.
+    Two layers. **Prevention:** :meth:`check_path` re-runs the ``sys.path`` check of
+    :func:`load_python_target`, so an extension that put the checkout (the scan
+    root, a project root or the current directory) on ``sys.path`` -- at import
+    time, in its factory or in a hook -- fails the run (exit 2) before a later
+    import can resolve through that entry. It runs at the start of every
+    :meth:`check`, after every factory and before every report hook.
+
+    **Detection:** a snapshot of ``sys.modules`` is taken before the first
+    ``python:`` import; :meth:`check` compares the current ``sys.modules`` with it
+    and refuses when an added or replaced entry reports a location inside the
+    boundary (the running interpreter's own ``site-packages`` is exempt). This is
+    best-effort detection of accidental imports, after the fact (the module has
+    already run), and it is defeated by a planted module that rewrites its own
+    location (``__file__``/``__spec__``), by an import whose ``sys.modules`` entry is
+    deleted again, and by code run without a ``sys.modules`` entry at all
+    (``spec_from_file_location`` + ``exec_module``, ``runpy.run_path``). Those need the
+    extension's own cooperation (threat model R1/R3). Entries that are not modules,
+    or that carry no location, are skipped. Accepted entries are remembered, so each
+    new entry is inspected once.
     """
 
-    def __init__(self, boundary: _Boundary):
+    def __init__(self, boundary: _Boundary, cwd: Path):
         """Snapshot ``sys.modules``.
 
         :param boundary: The run's boundary.
+        :param cwd: The current directory given by the invoker (for relative
+            ``sys.path`` entries).
         """
         self._boundary = boundary
+        self._cwd = cwd
         self._seen: dict[str, object] = dict(sys.modules)
+        self._accepted_path: Optional[tuple[object, ...]] = None
 
     @classmethod
     def start(cls, root: Path, cwd: Path) -> ModuleWatch:
@@ -739,17 +772,59 @@ class ModuleWatch:
         :param cwd: The current directory.
         :returns: The watch.
         """
-        return cls(_Boundary.of(root, cwd))
+        return cls(_Boundary.of(root, cwd), cwd)
 
     def changed(self) -> bool:
-        """Return whether ``sys.modules`` may hold an entry not inspected yet (cheap test).
+        """Return whether ``sys.modules`` changed size since the last snapshot.
+
+        A cheap hint only: a replaced entry keeps the size, so no security decision
+        is taken on it (:meth:`check` runs unconditionally at every call site).
 
         :returns: ``True`` when its size differs from the last snapshot.
         """
         return len(sys.modules) != len(self._seen)
 
+    def _path_key(self) -> Optional[tuple[object, ...]]:
+        """Return the process cwd and the ``sys.path`` entries, or ``None`` when unreadable.
+
+        :returns: The key the last accepted ``sys.path`` check is remembered by.
+        """
+        try:
+            return (os.getcwd(), *(str.__str__(entry) for entry in list(sys.path) if isinstance(entry, str)))
+        except KeyboardInterrupt:
+            raise
+        except BaseException:
+            return None
+
+    def check_path(self):
+        """Refuse when a ``sys.path`` entry now lies inside the boundary (M6, prevention).
+
+        The full check runs only when ``sys.path`` or the process cwd differs from
+        the last accepted state, so calling this before every hook stays cheap. An
+        unreadable state is always checked (and fails closed).
+
+        :raises ExtensionError: When an entry is inside, or ``sys.path`` cannot be read.
+        """
+        key = self._path_key()
+        if key is not None and key == self._accepted_path:
+            return
+        _check_import_path(self._boundary, self._cwd)
+        self._accepted_path = key
+
     def check(self):
-        """Refuse when a module added or replaced since the snapshot lies inside (M6).
+        """Refuse when a module added or replaced since the snapshot lies inside, or ``sys.path`` does (M6).
+
+        The ``sys.modules`` comparison runs first, so a module already imported from
+        the checkout is named; then :meth:`check_path`. Neither part imports
+        anything, so their order inside this call does not matter for prevention.
+
+        :raises ExtensionError: Naming the module (never its path), or ``sys.path``.
+        """
+        self._check_modules()
+        self.check_path()
+
+    def _check_modules(self):
+        """Refuse when a module added or replaced since the snapshot reports a location inside.
 
         :raises ExtensionError: Naming the module (never its path).
         """
@@ -808,7 +883,7 @@ def load_python_target(spec: str, *, allow_python: bool, root: Path, cwd: Path) 
     boundary = _Boundary.of(root, cwd)
     _check_import_path(boundary, cwd)
     _check_origins(parsed.target, boundary)
-    watch = ModuleWatch(boundary)
+    watch = ModuleWatch(boundary, cwd)
     try:
         module = importlib.import_module(parsed.target)
     except KeyboardInterrupt:
@@ -919,14 +994,27 @@ class LoadedExtensions:
     def check_modules(self):
         """Refuse when a ``python:`` extension's run imported a module from the checkout (M6).
 
-        Called after the factories, after the report hooks and after rendering (the
-        filters); a no-op without ``python:`` extensions.
+        Called after the factories, before and after the report hooks and after
+        rendering (the filters); a no-op without ``python:`` extensions.
 
         :raises ExtensionError: When a module added since the first ``python:``
-            import resolves inside the scan root, its project root or the cwd.
+            import resolves inside the scan root, its project root or the cwd, or
+            a ``sys.path`` entry now does.
         """
         if self.watch is not None:
             self.watch.check()
+
+    def check_import_path(self):
+        """Refuse when a ``sys.path`` entry now lies inside the boundary (M6, prevention).
+
+        Called before every report and event hook, so an entry one hook (or
+        extension) added fails the run before the next hook can import through it.
+        Cheap when ``sys.path`` is unchanged; a no-op without ``python:`` extensions.
+
+        :raises ExtensionError: When an entry is inside, or ``sys.path`` cannot be read.
+        """
+        if self.watch is not None:
+            self.watch.check_path()
 
     @property
     def names(self) -> tuple[str, ...]:
@@ -1104,7 +1192,10 @@ def resolve_extensions(
     Specs are taken in order: ``config.telemetry_extensions`` first (re-checked:
     builtin only), then ``specs`` (the invoker's argv-equivalent list). Every spec
     is parsed and the gate is checked for every ``python:`` spec before any
-    extension is resolved, so a refusal executes nothing.
+    extension is resolved, so a refusal executes nothing. After every factory (and
+    its ``filters()`` hook) the :class:`ModuleWatch` checks ``sys.path`` and
+    ``sys.modules`` again, so a factory that adds the checkout to ``sys.path`` fails
+    the run before the next extension is imported or any hook runs (M6).
 
     :param specs: Invoker-supplied specs (``--extension``).
     :param config: The effective configuration.
@@ -1147,8 +1238,8 @@ def resolve_extensions(
             target = load_python_target(item.text, allow_python=allow_python, root=root, cwd=cwd)
             instance = _call(item.text, "factory", target)
             admitted.append(_admit(instance, spec=item.text, is_builtin=False))
-    if watch is not None:
-        watch.check()
+        if watch is not None:
+            watch.check()
     return _registry(admitted, watch)
 
 
@@ -1554,11 +1645,17 @@ def apply_report_hooks(
     :param loaded: The registry.
     :param flat_problems: ``id(nested problem) -> flat findings entry``, so each
         problem's data also reaches ``findings[].ext``.
+    Before the first hook and before every later one, ``sys.path`` is checked
+    again (M6 prevention), so an entry inside the boundary added by a factory or an
+    earlier hook fails the run before the next hook can import through it.
+
     :raises ExtensionError: When a hook raises, or returns invalid or oversized data,
-        or a ``python:`` extension's hooks imported a module from the checkout (M6).
+        a ``sys.path`` entry lies inside the boundary, or a ``python:`` extension's
+        hooks imported a module from the checkout (M6).
     """
     if not loaded:
         return
+    loaded.check_modules()
     frozen_model = freeze(context)
     documents = context["documents"]
     frozen_documents = frozen_model["documents"]
@@ -1574,6 +1671,7 @@ def apply_report_hooks(
     budget = _Budget()
     for extension in loaded.extensions:
         if extension.provide_run is not None:
+            loaded.check_import_path()
             value = _run_hook(extension, HOOK_RUN, extension.provide_run, (frozen_model,), budget)
             if value is not None:
                 run_ext[extension.name] = value
@@ -1581,6 +1679,7 @@ def apply_report_hooks(
             continue
         for document, frozen_document in zip(documents, frozen_documents, strict=True):
             if extension.provide_document is not None:
+                loaded.check_import_path()
                 value = _run_hook(
                     extension, HOOK_DOCUMENT, extension.provide_document, (frozen_document, frozen_model), budget
                 )
@@ -1589,6 +1688,7 @@ def apply_report_hooks(
             if extension.provide_problem is None:
                 continue
             for problem, frozen_problem in zip(document["problems"], frozen_document["problems"], strict=True):
+                loaded.check_import_path()
                 value = _run_hook(
                     extension,
                     HOOK_PROBLEM,
@@ -1611,9 +1711,9 @@ class EventHookGuard:
     invalid return is swallowed, the event keeps its core fields, and **one**
     bounded, neutralized warning is written per extension per run. Refusals are not
     handled here: they happen in :func:`resolve_extensions` and are never swallowed
-    (M4). Neither is a module-origin refusal (M6): when ``sys.modules`` grew during
-    the hooks, :meth:`ModuleWatch.check` runs and its :class:`ExtensionError`
-    propagates. ``KeyboardInterrupt`` propagates.
+    (M4). Neither is a module-origin refusal (M6): ``sys.path`` is checked before
+    every hook, and :meth:`ModuleWatch.check` runs unconditionally after each event's
+    hooks; their :class:`ExtensionError` propagates. ``KeyboardInterrupt`` propagates.
     """
 
     def __init__(self, loaded: LoadedExtensions, *, warn: Callable[[str], None]):
@@ -1636,7 +1736,8 @@ class EventHookGuard:
         :param doc: Its document mapping.
         :param model: The run-level context.
         :returns: Extension data by name; failing extensions are omitted.
-        :raises ExtensionError: When a hook imported a module from the checkout (M6).
+        :raises ExtensionError: When a ``sys.path`` entry lies inside the boundary, or
+            a hook imported a module from the checkout (M6).
         """
         result: dict[str, JsonValue] = {}
         arguments: Optional[tuple[Any, ...]] = None
@@ -1645,6 +1746,7 @@ class EventHookGuard:
                 continue
             if arguments is None:
                 arguments = (freeze(dict(problem)), freeze(dict(doc)), freeze(dict(model)))
+            self._loaded.check_import_path()
             try:
                 value = _run_hook(extension, HOOK_PROBLEM, extension.provide_problem, arguments, self._budget)
             except ExtensionError as exc:
@@ -1654,7 +1756,7 @@ class EventHookGuard:
             if value is not None:
                 result[extension.name] = value
         watch = self._loaded.watch
-        if watch is not None and watch.changed():
+        if watch is not None:
             watch.check()
         return result
 

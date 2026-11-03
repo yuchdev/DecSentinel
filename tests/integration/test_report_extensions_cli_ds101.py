@@ -9,6 +9,7 @@ builtins merged into the effective Config), M28 (nothing on stdout when a hook f
 """
 
 import json
+import os
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -340,3 +341,157 @@ def test_subdirectory_scan_with_the_checkout_on_pythonpath_is_refused(
     assert "project root" in captured.err
     assert not sentinel.exists()
     assert scans == []
+
+
+# --------------------------------------------------------------------------- re-verification regressions N1/N2 (2026-11-03)
+
+#: Auditor repro w8: a marker the scanned repo plants under ``docs/`` (or a scan root that is a link to ``docs/``).
+_PLANTED_MARKERS = (
+    "none",
+    "empty-git-file",
+    "dangling-git-link",
+    "pyproject.toml",
+    "docsentinel.toml",
+    "doc_sentinel.toml",
+    "symlinked-root",
+)
+
+
+@pytest.fixture
+def fresh_modules() -> Any:
+    """Forget every ``ds_cli_`` module a test imported."""
+    before = set(sys.modules)
+    yield
+    for name in set(sys.modules) - before:
+        if name.startswith("ds_cli_"):
+            sys.modules.pop(name, None)
+
+
+@pytest.mark.parametrize("planted", _PLANTED_MARKERS)
+def test_marker_planted_under_docs_never_shrinks_the_boundary(
+    planted: str,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+    scans: list[Any],
+    capsys: pytest.CaptureFixture[str],
+    fresh_modules: Any,
+):
+    """
+    [Integration] report extensions cli ds101: verifies a marker planted under docs/ cannot admit <repo>/src (M6).
+
+    Scenario:
+        Given a git checkout whose ``src/`` holds an extension that writes a sentinel on import, ``src/`` on sys.path
+            (``PYTHONPATH=<repo>/src``), the cwd elsewhere, and ``docs/`` (the DS101 case) carrying a planted marker
+            -- none, an empty ``.git`` file, a dangling ``.git`` link, ``pyproject.toml``, ``docsentinel.toml``,
+            ``doc_sentinel.toml``, or a ``.git`` file with the scan root given as a symlink to ``docs/``
+        When ``docsentinel scan <root> --extension python:<ext>:make --allow-python-extensions`` runs
+        Then it exits 2 before the scan, nothing is on stdout and the extension never ran.
+
+    Boundaries:
+        - Focus: re-verification finding N1 (auditor repro w8, one row per marker)
+        - Fixtures/params: one planted marker per case; ``none`` is the control
+        - Scope: in-process CLI call
+
+    On failure, first check:
+        - ``extensions.project_roots`` (every marked ancestor, not the nearest)
+    """
+    checkout = tmp_path_factory.mktemp("checkout")
+    (checkout / ".git").mkdir()
+    docs = load_asset_case("ds101", "dangling_file_link", checkout / "docs").root
+    elsewhere = tmp_path_factory.mktemp("elsewhere")
+    sentinel = tmp_path_factory.mktemp("sentinel") / "ran"
+    name = f"ds_cli_company_ext_{planted.replace('-', '_').replace('.', '_')}"
+    (checkout / "src").mkdir()
+    (checkout / "src" / f"{name}.py").write_text(
+        f"from pathlib import Path\nPath({str(sentinel)!r}).write_text('ran')\n"
+        "class E:\n    name = 'company'\ndef make():\n    return E()\n",
+        encoding="utf-8",
+    )
+    root = docs
+    if planted in ("empty-git-file", "symlinked-root"):
+        (docs / ".git").write_text("", encoding="utf-8")
+    elif planted == "dangling-git-link":
+        os.symlink(checkout / "does-not-exist", docs / ".git")
+    elif planted != "none":
+        (docs / planted).write_text("", encoding="utf-8")
+    if planted == "symlinked-root":
+        root = elsewhere / "link"
+        os.symlink(docs, root)
+    monkeypatch.syspath_prepend(str(checkout / "src"))
+    monkeypatch.chdir(elsewhere)
+
+    code = cli.main(["scan", str(root), "--extension", f"python:{name}:make", "--allow-python-extensions"])
+    captured = capsys.readouterr()
+
+    assert code == 2 and captured.out == ""
+    assert "sys.path" in captured.err
+    assert not sentinel.exists()
+    assert name not in sys.modules
+    assert scans == []
+
+
+@pytest.mark.parametrize("inserted", ["cwd", "root"])
+def test_factory_putting_the_checkout_on_sys_path_fails_before_the_hook(
+    inserted: str,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    fresh_modules: Any,
+):
+    """
+    [Integration] report extensions cli ds101: verifies sys.path is re-checked after the factory (M6, N2).
+
+    Scenario:
+        Given an honest out-of-checkout extension whose factory does ``sys.path.insert(0, <cwd or scan root>)`` and
+            whose run hook does ``import <helper>``, and a planted helper there that writes a sentinel and rewrites
+            its own ``__file__``/``__spec__.origin`` to the interpreter's site-packages (auditor repro w13), the cwd
+            being the git checkout
+        When ``docsentinel scan <repo>/docs --extension python:<ext>:make --allow-python-extensions`` runs
+        Then it exits 2 naming sys.path, nothing is on stdout, the factory ran but the hook and the helper never did.
+
+    Boundaries:
+        - Focus: re-verification finding N2 (prevention instead of location-trusting detection)
+        - Fixtures/params: the cwd and the scan root as the inserted entry
+        - Scope: in-process CLI call
+
+    On failure, first check:
+        - the per-factory ``watch.check()`` in ``extensions.resolve_extensions`` and ``ModuleWatch.check_path``
+    """
+    checkout = tmp_path_factory.mktemp("checkout")
+    (checkout / ".git").mkdir()
+    docs = load_asset_case("ds101", "dangling_file_link", checkout / "docs").root
+    outside = tmp_path_factory.mktemp("outside")
+    sentinels = tmp_path_factory.mktemp("sentinel")
+    helper = f"ds_cli_company_helpers_{inserted}"
+    ext = f"ds_cli_honest_ext_{inserted}"
+    target = checkout if inserted == "cwd" else docs
+    (target / f"{helper}.py").write_text(
+        "import pathlib, sysconfig\n"
+        f"pathlib.Path({str(sentinels / 'helper')!r}).write_text('x')\n"
+        f"fake = sysconfig.get_path('purelib') + '/{helper}.py'\n"
+        "__file__ = fake\n__spec__.origin = fake\n",
+        encoding="utf-8",
+    )
+    (outside / f"{ext}.py").write_text(
+        "import os, pathlib, sys\n"
+        "class E:\n    name = 'honest'\n    def provide_run(self, model):\n"
+        f"        pathlib.Path({str(sentinels / 'hook')!r}).write_text('x')\n"
+        f"        import {helper}\n        return {{'v': 1}}\n"
+        "def make():\n"
+        f"    pathlib.Path({str(sentinels / 'factory')!r}).write_text('x')\n"
+        f"    sys.path.insert(0, {'os.getcwd()' if inserted == 'cwd' else repr(str(docs))})\n"
+        "    return E()\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    monkeypatch.syspath_prepend(str(outside))
+    monkeypatch.chdir(checkout)
+
+    code = cli.main(["scan", str(docs), "--extension", f"python:{ext}:make", "--allow-python-extensions"])
+    captured = capsys.readouterr()
+
+    assert code == 2 and captured.out == ""
+    assert "sys.path" in captured.err
+    assert (sentinels / "factory").exists()
+    assert not (sentinels / "hook").exists() and not (sentinels / "helper").exists()
+    assert helper not in sys.modules

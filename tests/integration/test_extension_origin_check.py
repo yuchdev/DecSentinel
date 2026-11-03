@@ -511,34 +511,95 @@ def test_scanning_a_subdirectory_still_covers_the_checkout(
     assert not sentinel.exists()
 
 
-def test_project_root_is_the_nearest_marked_ancestor(layout: dict[str, Path]):
+def test_project_roots_are_every_marked_ancestor(layout: dict[str, Path]):
     """
-    [Integration] extension origin check: verifies project_roots picks the nearest marker and none without one.
+    [Integration] extension origin check: verifies project_roots keeps every marked ancestor, not the nearest (M6).
 
     Scenario:
         Given an outer directory with ``.git`` holding an inner one with ``pyproject.toml`` and a ``docs`` below it,
             and a separate unmarked directory
         When project_roots is asked for ``inner/docs``, ``inner`` and the unmarked directory
-        Then it returns ``inner`` twice (the scan root itself counts) and nothing for the unmarked tree.
+        Then ``inner/docs`` and ``inner`` both yield ``inner`` and ``outer`` (the scan root itself counts), and the
+            unmarked tree yields nothing.
 
     Boundaries:
-        - Focus: finding 2 normal and edge cases
+        - Focus: re-verification finding N1 (amended M6: every marked ancestor); normal and empty cases
         - Fixtures/params: none
         - Scope: project_roots
 
     On failure, first check:
-        - the ancestor walk in ``extensions.project_roots``
+        - the ancestor walk in ``extensions.project_roots`` (it must not stop at the first marker)
     """
     outer = layout["root"]
     (outer / ".git").mkdir()
     inner = outer / "inner"
     (inner / "docs").mkdir(parents=True)
     (inner / "pyproject.toml").write_text("", encoding="utf-8")
+    expected = {os.path.realpath(inner), os.path.realpath(outer)}
 
-    assert os.path.realpath(inner) in {os.path.realpath(p) for p in project_roots(inner / "docs")}
-    assert {os.path.realpath(p) for p in project_roots(inner)} == {os.path.realpath(inner)}
-    assert all(os.path.realpath(p) != os.path.realpath(outer) for p in project_roots(inner / "docs"))
+    assert {os.path.realpath(p) for p in project_roots(inner / "docs")} == expected
+    assert {os.path.realpath(p) for p in project_roots(inner)} == expected
     assert project_roots(layout["outside"]) == ()
+
+
+@pytest.mark.parametrize("planted", ["empty-git-file", "dangling-git-link", "pyproject.toml"])
+def test_a_marker_planted_below_the_checkout_never_drops_the_checkout(planted: str, layout: dict[str, Path]):
+    """
+    [Integration] extension origin check: verifies a repo-controlled marker under docs/ cannot shrink the boundary.
+
+    Scenario:
+        Given a checkout marked by a ``.git`` directory whose ``docs/`` holds a planted marker (an empty ``.git``
+            file, a dangling ``.git`` link or a ``pyproject.toml``)
+        When project_roots is asked for ``<checkout>/docs``
+        Then both ``docs`` and the checkout are project roots.
+
+    Boundaries:
+        - Focus: re-verification finding N1 (nearest-marker boundary shrink)
+        - Fixtures/params: one planted marker kind per case
+        - Scope: project_roots
+
+    On failure, first check:
+        - ``extensions.project_roots`` and ``_has_project_marker``
+    """
+    checkout = layout["root"]
+    (checkout / ".git").mkdir()
+    docs = checkout / "docs"
+    docs.mkdir()
+    if planted == "empty-git-file":
+        (docs / ".git").write_text("", encoding="utf-8")
+    elif planted == "dangling-git-link":
+        if not hasattr(os, "symlink"):
+            pytest.skip("symlinks are not available")
+        os.symlink(checkout / "does-not-exist", docs / ".git")
+    else:
+        (docs / "pyproject.toml").write_text("", encoding="utf-8")
+
+    found = {os.path.realpath(p) for p in project_roots(docs)}
+
+    assert found == {os.path.realpath(docs), os.path.realpath(checkout)}
+
+
+def test_an_implausibly_deep_scan_root_fails_closed(layout: dict[str, Path], monkeypatch: pytest.MonkeyPatch):
+    """
+    [Integration] extension origin check: verifies project_roots refuses rather than stops early past its bound.
+
+    Scenario:
+        Given an ancestor bound lowered to 2 and a scan root nested deeper than that
+        When project_roots walks it
+        Then an ExtensionError is raised instead of a partial (possibly shrunken) result.
+
+    Boundaries:
+        - Focus: re-verification finding N1 edge case (bounded walk to the filesystem root fails closed)
+        - Fixtures/params: none
+        - Scope: project_roots
+
+    On failure, first check:
+        - the ``for ... else`` of the ancestor walk in ``extensions.project_roots``
+    """
+    monkeypatch.setattr(extensions, "_MAX_ANCESTORS", 2)
+
+    with pytest.raises(ExtensionError, match="implausibly deep"):
+        project_roots(layout["root"])
 
 
 def test_sys_modules_entry_without_a_location_is_refused(layout: dict[str, Path], monkeypatch: pytest.MonkeyPatch):

@@ -1405,6 +1405,9 @@ class _RefusingWatch:
     def changed(self) -> bool:
         return True
 
+    def check_path(self):
+        return None
+
     def check(self):
         raise ExtensionError("python extension refused: module planted was imported during the run")
 
@@ -1498,3 +1501,102 @@ def test_module_watch_refuses_an_entry_it_cannot_inspect(tmp_path, monkeypatch: 
 
     with pytest.raises(ExtensionError, match="module ds_impostor was imported during the run"):
         watch.check()
+
+
+# --------------------------------------------------------------------------- re-verification regressions N2/N3 (2026-11-03)
+
+
+def test_module_watch_check_path_refuses_a_root_entry_added_after_the_start(tmp_path, monkeypatch: pytest.MonkeyPatch):
+    """
+    [Unit] extensions: verifies ModuleWatch.check_path refuses a sys.path entry added inside the boundary (M6, N2).
+
+    Scenario:
+        Given a watch started over a scan root, with sys.path holding nothing inside it
+        When the watch checks sys.path before and after the scan root is inserted at sys.path[0]
+        Then the first check passes and the second raises an ExtensionError naming sys.path (never the path).
+
+    Boundaries:
+        - Focus: re-verification finding N2 prevention layer (a factory changing sys.path)
+        - Fixtures/params: none
+        - Scope: ModuleWatch.check_path
+
+    On failure, first check:
+        - ``extensions.ModuleWatch.check_path`` and its ``sys.path`` cache key
+    """
+    watch = extensions.ModuleWatch.start(tmp_path, tmp_path)
+    watch.check_path()
+    monkeypatch.setattr(sys, "path", [str(tmp_path), *sys.path])
+
+    with pytest.raises(ExtensionError, match=r"sys\.path") as caught:
+        watch.check_path()
+    assert str(tmp_path) not in str(caught.value)
+
+
+def test_report_hooks_stop_before_the_next_hook_once_sys_path_points_inside(tmp_path, monkeypatch: pytest.MonkeyPatch):
+    """
+    [Unit] extensions: verifies a hook adding the root to sys.path stops the run before the next hook (M6, N2).
+
+    Scenario:
+        Given two admitted extensions under a real watch: the first run hook inserts the scan root into sys.path,
+            the second records that it ran
+        When apply_report_hooks runs them in order
+        Then an ExtensionError naming sys.path is raised and the second hook never ran.
+
+    Boundaries:
+        - Focus: re-verification finding N2 (sys.path re-checked before every hook)
+        - Fixtures/params: none
+        - Scope: apply_report_hooks with a real ModuleWatch
+
+    On failure, first check:
+        - the ``check_import_path`` calls in ``extensions.apply_report_hooks``
+    """
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    calls: list[str] = []
+
+    def sneak(model: Any) -> None:
+        sys.path.insert(0, str(tmp_path))
+
+    admitted = admit_extensions([_ext("first", provide_run=sneak), _ext("second", provide_run=calls.append)])
+    watch = extensions.ModuleWatch.start(tmp_path, tmp_path)
+    loaded = LoadedExtensions(admitted.extensions, admitted.filters, watch)
+    context = ReportModel.build(_result(), Config())
+
+    with pytest.raises(ExtensionError, match=r"sys\.path"):
+        extensions.apply_report_hooks(context, loaded)
+    assert calls == []
+
+
+def test_event_guard_checks_modules_even_when_sys_modules_keeps_its_size(tmp_path, monkeypatch: pytest.MonkeyPatch):
+    """
+    [Unit] extensions: verifies the event path catches a replaced sys.modules entry (same size) (M6, N3).
+
+    Scenario:
+        Given a real watch started while ``ds_n3_victim`` is an outside module in sys.modules, and a problem hook
+            that replaces that entry with a module located inside the scan root (sys.modules keeps its size)
+        When the event guard runs the hook for one problem
+        Then the ExtensionError naming the module propagates and no warning is written.
+
+    Boundaries:
+        - Focus: re-verification finding N3 (the size-only ``changed()`` shortcut skipped the check)
+        - Fixtures/params: none
+        - Scope: EventHookGuard.problem_ext with a real ModuleWatch
+
+    On failure, first check:
+        - the unconditional ``watch.check()`` at the end of ``EventHookGuard.problem_ext``
+    """
+    monkeypatch.setitem(sys.modules, "ds_n3_victim", types.ModuleType("ds_n3_victim"))
+    planted = types.ModuleType("ds_n3_victim")
+    planted.__file__ = str(tmp_path / "ds_n3_victim.py")
+
+    def swap(problem: Any, doc: Any, model: Any) -> dict[str, bool]:
+        sys.modules["ds_n3_victim"] = planted
+        return {"ok": True}
+
+    admitted = admit_extensions([_ext(provide_problem=swap)])
+    watch = extensions.ModuleWatch.start(tmp_path, tmp_path)
+    loaded = LoadedExtensions(admitted.extensions, admitted.filters, watch)
+    warnings: list[str] = []
+
+    with pytest.raises(ExtensionError, match="module ds_n3_victim was imported during the run"):
+        EventHookGuard(loaded, warn=warnings.append).problem_ext({"rule": "DS101"}, {"path": "a.md"}, {})
+    assert warnings == []
