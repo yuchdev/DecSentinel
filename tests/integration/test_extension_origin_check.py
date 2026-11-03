@@ -832,6 +832,56 @@ def test_link_to_link_root_keeps_the_intermediate_checkout_in_the_boundary(
 
 
 @pytest.mark.skipif(not hasattr(os, "symlink"), reason="symlinks are not available")
+def test_dotdot_hop_across_a_symlink_anchors_the_kernel_spelling(
+    layout: dict[str, Path], tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+):
+    """
+    [Integration] extension origin check: verifies a ``..`` hop across a symlink anchors the kernel's path (M6, L-a).
+
+    Scenario:
+        Given ``el/lnk -> deep/x`` and the root spelling ``el/rl -> lnk/../C/docs``, where ``deep/C`` is a git
+            checkout whose ``docs`` links out to ``out/docs`` and whose ``src/`` (on sys.path) holds an extension that
+            writes a sentinel on import (auditor fixture r5f/dotdot)
+        When the extension is resolved with ``origin_roots=(el/rl,)`` and the canonical ``out/docs`` as root
+        Then ``_link_chain`` holds ``deep/C/docs`` (the kernel's hop, not the lexical ``el/C/docs``), the extension
+            is refused naming sys.path and the planted module never ran.
+
+    Boundaries:
+        - Focus: security follow-up L-a (lexical ``..`` normalization disagreed with the kernel)
+        - Fixtures/params: none
+        - Scope: ``extensions._link_chain``, resolve_extensions
+
+    On failure, first check:
+        - the ``kernel`` spelling in ``extensions._link_chain``
+    """
+    base = tmp_path_factory.mktemp("dotdot").resolve()
+    for directory in ("el", "deep/x", "deep/C/.git", "deep/C/src", "out/docs"):
+        (base / directory).mkdir(parents=True)
+    os.symlink(base / "deep" / "x", base / "el" / "lnk")
+    os.symlink("lnk/../C/docs", base / "el" / "rl")
+    os.symlink(base / "out" / "docs", base / "deep" / "C" / "docs")
+    name = _unique("dotdot_ext")
+    sentinel = layout["outside"] / f"{name}.sentinel"
+    _plant(base / "deep" / "C" / "src", f"{name}.py", sentinel, "def make():\n    return None\n")
+    monkeypatch.syspath_prepend(str(base / "deep" / "C" / "src"))
+
+    chain = extensions._link_chain(str(base / "el" / "rl"))
+
+    assert str(base / "deep" / "C" / "docs") in chain
+    assert str(base / "out" / "docs") in chain
+    with pytest.raises(ExtensionError, match=r"sys\.path"):
+        resolve_extensions(
+            (f"python:{name}:make",),
+            config=Config(),
+            allow_python=True,
+            root=(base / "el" / "rl").resolve(),
+            cwd=layout["cwd"],
+            origin_roots=(base / "el" / "rl",),
+        )
+    assert not sentinel.exists()
+
+
+@pytest.mark.skipif(not hasattr(os, "symlink"), reason="symlinks are not available")
 def test_symlink_loop_as_origin_root_fails_closed(layout: dict[str, Path], tmp_path_factory: pytest.TempPathFactory):
     """
     [Integration] extension origin check: verifies a symlink loop as a root spelling is refused, not walked forever (M6, L1).

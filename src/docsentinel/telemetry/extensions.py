@@ -160,6 +160,9 @@ _MAX_ANCESTORS = 256
 #: Bound on the final-component symlink hops followed from one scan-root spelling
 #: (M6, amended 2026-11-03, L1); Linux ``MAXSYMLINKS`` is 40 too.
 _MAX_LINK_HOPS = 40
+#: Bound on the ``os.readlink`` calls of one spelling's walk: the kernel and the
+#: lexical spelling of each hop are both followed (amended 2026-11-04, L-a).
+_MAX_LINK_READS = 4 * _MAX_LINK_HOPS
 
 #: Entries whose presence marks a project root: every marked ancestor of the scan
 #: root (inclusive) is an M6 anchor too (amended 2026-11-03: not only the nearest).
@@ -398,30 +401,50 @@ def _link_chain(text: str) -> tuple[str, ...]:
     ``<checkout>/docs`` and ``outside/docs``, so the checkout stays in the boundary
     even though neither the given nor the canonical spelling lies inside it. A
     relative link target is joined to the directory of the link naming it, both
-    as written and with that directory canonicalized. Links inside an intermediate
-    directory component need no walk: :func:`project_roots` and
-    :func:`_spellings` already see through them. The hops only add anchors, so a
-    lexically imprecise hop can widen the boundary but never shrink it.
+    as written and with that directory canonicalized. Each hop is also anchored in
+    the kernel's spelling, ``realpath(dirname(joined)) / basename(joined)``: a
+    target such as ``lnk/../C/docs`` whose ``..`` crosses the symlink ``lnk``
+    resolves through ``lnk``'s target in the kernel but collapses to ``C/docs``
+    lexically (amended 2026-11-04, security follow-up L-a). The chain is followed
+    through both the kernel spelling and the lexical one. Links
+    inside an intermediate directory component need no walk: :func:`project_roots`
+    and :func:`_spellings` already see through them. The hops only add anchors, so
+    a lexically imprecise hop can widen the boundary but never shrink it.
 
     :param text: A path string.
     :returns: The hop spellings, in chain order (empty when ``text`` is no link).
-    :raises ExtensionError: When the chain is longer than :data:`_MAX_LINK_HOPS`
-        (fail closed rather than stop early).
+    :raises ExtensionError: When the chain is longer than :data:`_MAX_LINK_HOPS`,
+        or more than :data:`_MAX_LINK_READS` links are read (fail closed rather
+        than stop early).
     """
     found: list[str] = []
-    current = os.path.abspath(text)
+    frontier = [os.path.abspath(text)]
+    reads = 0
     for _ in range(_MAX_LINK_HOPS):
-        try:
-            target: Optional[str] = os.readlink(current)
-        except (OSError, ValueError):
-            # Not a link, or unreadable: the chain ends here (EINVAL is the normal end).
-            target = None
-        if target is None:
+        following: list[str] = []
+        for current in frontier:
+            reads += 1
+            if reads > _MAX_LINK_READS:
+                raise ExtensionError(
+                    "python extensions are refused: the scan root is an implausibly long symlink chain"
+                )
+            try:
+                target: Optional[str] = os.readlink(current)
+            except (OSError, ValueError):
+                # Not a link, or unreadable: this branch ends here (EINVAL is the normal end).
+                target = None
+            if target is None:
+                continue
+            directory = os.path.dirname(current)
+            joined = os.path.join(directory, target).rstrip(os.sep) or os.sep
+            lexical = os.path.abspath(joined)
+            kernel = os.path.abspath(os.path.join(os.path.realpath(os.path.dirname(joined)), os.path.basename(joined)))
+            found.extend((lexical, os.path.abspath(os.path.join(os.path.realpath(directory), target)), kernel))
+            following.extend((kernel, lexical))
+        if not following:
             return tuple(dict.fromkeys(found))
-        directory = os.path.dirname(current)
-        canonical = os.path.join(os.path.realpath(directory), target)
-        current = os.path.abspath(os.path.join(directory, target))
-        found.extend((current, os.path.abspath(canonical)))
+        # Deduplicated per hop only: a loop keeps reading links until a bound fails closed.
+        frontier = list(dict.fromkeys(following))
     raise ExtensionError("python extensions are refused: the scan root is an implausibly long symlink chain")
 
 
