@@ -7,6 +7,10 @@ The only other ``importlib.import_module`` call sites allowed are fixed string l
 modules that lazily import optional dependencies. ``find_spec`` is likewise confined to the helper
 module and the literal availability probes. M2: only ``cli.py`` names the gate's environment
 variable. Each tripwire is also run against a seeded violation so it cannot rot into a no-op.
+Re-verification N4 (2026-11-03): string literals are checked after constant folding, reflection
+(``getattr``/``vars``/``__dict__``/``__getattribute__``) over ``builtins`` and ``sys.modules[...]`` is
+treated like reflection over ``importlib``, and a ``sys.modules`` lookup by a non-literal key is a
+violation outside the helper module.
 """
 
 import ast
@@ -69,6 +73,14 @@ _DYNAMIC_NAMES = frozenset(
         "zipimporter",
         "exec",
         "eval",
+        # Re-verification N4 (2026-11-03): re-execution, code objects, lazy loaders, .pth/dictConfig
+        # by-name construction and the C-API import.
+        "reload",
+        "get_code",
+        "LazyLoader",
+        "addsitedir",
+        "dictConfig",
+        "PyImport_ImportModule",
     }
 )
 
@@ -89,6 +101,14 @@ _BANNED_MODULES = frozenset(
         "importlib._bootstrap",
         "importlib._bootstrap_external",
         "importlib.resources",
+        # Re-verification N4 (2026-11-03): C-API access, pickle twins and statement runners.
+        "ctypes",
+        "_pickle",
+        "shelve",
+        "timeit",
+        "code",
+        "cProfile",
+        "site",
     }
 )
 
@@ -139,17 +159,124 @@ def _literal_call(node: ast.AST, parents: dict[ast.AST, ast.AST]) -> Optional[st
     return argument.value if isinstance(argument, ast.Constant) and isinstance(argument.value, str) else None
 
 
+#: Modules whose namespace holds an import function; reflective access to them is a violation.
+_GUARDED_MODULES = ("importlib", "builtins")
+
+
 def _importlib_aliases(tree: ast.AST) -> set[str]:
-    """Return the local names bound to an ``importlib`` module."""
+    """Return the local names bound to an ``importlib`` or ``builtins`` module (or a name from one)."""
     aliases: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
-                if alias.name == "importlib" or alias.name.startswith("importlib."):
+                if alias.name in _GUARDED_MODULES or alias.name.startswith(tuple(f"{m}." for m in _GUARDED_MODULES)):
                     aliases.add(alias.asname or alias.name.split(".")[0])
-        elif isinstance(node, ast.ImportFrom) and (node.module or "").startswith("importlib"):
+        elif isinstance(node, ast.ImportFrom) and (node.module or "").split(".")[0] in _GUARDED_MODULES:
             aliases.update(alias.asname or alias.name for alias in node.names)
     return aliases
+
+
+def _sys_aliases(tree: ast.AST) -> tuple[set[str], set[str]]:
+    """Return the local names bound to ``sys`` and those bound to ``sys.modules`` itself."""
+    sys_names: set[str] = set()
+    modules_names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            sys_names.update(alias.asname or "sys" for alias in node.names if alias.name == "sys")
+        elif isinstance(node, ast.ImportFrom) and node.module == "sys":
+            modules_names.update(alias.asname or alias.name for alias in node.names if alias.name == "modules")
+    return sys_names, modules_names
+
+
+def _is_sys_modules(node: ast.AST, sys_names: set[str], modules_names: set[str]) -> bool:
+    """Return whether ``node`` spells ``sys.modules`` (through any alias)."""
+    if isinstance(node, ast.Name):
+        return node.id in modules_names
+    return (
+        isinstance(node, ast.Attribute)
+        and node.attr == "modules"
+        and isinstance(node.value, ast.Name)
+        and node.value.id in sys_names
+    )
+
+
+def _is_literal(node: Optional[ast.AST]) -> bool:
+    """Return whether ``node`` is a plain string constant."""
+    return isinstance(node, ast.Constant) and isinstance(node.value, str)
+
+
+def _sys_modules_violation(node: ast.AST, sys_names: set[str], modules_names: set[str]) -> bool:
+    """Return whether ``node`` looks a module up in ``sys.modules`` by a non-literal key."""
+    if isinstance(node, ast.Subscript) and _is_sys_modules(node.value, sys_names, modules_names):
+        return not _is_literal(node.slice)
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in ("get", "pop", "setdefault")
+        and _is_sys_modules(node.func.value, sys_names, modules_names)
+    ):
+        return not (node.args and _is_literal(node.args[0]))
+    return False
+
+
+def _is_guarded_target(
+    node: Optional[ast.AST], aliases: set[str], sys_names: set[str], modules_names: set[str]
+) -> bool:
+    """Return whether ``node`` is an importlib/builtins module or any ``sys.modules`` lookup.
+
+    ``sys.modules[...]``, ``sys.modules.get(...)`` and ``sys.modules`` itself all count, whatever the key, so
+    reflective access through them is treated like access to an importlib alias.
+    """
+    if node is None:
+        return False
+    if isinstance(node, ast.Name) and node.id in aliases:
+        return True
+    if _is_sys_modules(node, sys_names, modules_names):
+        return True
+    if isinstance(node, ast.Subscript):
+        return _is_sys_modules(node.value, sys_names, modules_names)
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and _is_sys_modules(node.func.value, sys_names, modules_names)
+    )
+
+
+def _reflection_violation(
+    node: ast.AST, parents: dict[ast.AST, ast.AST], aliases: set[str], sys_names: set[str], modules_names: set[str]
+) -> str:
+    """Return the reflective access a node makes to a guarded module, or ``""``.
+
+    Covers ``vars(x)``, ``getattr(x, <non-literal>)``, ``x.__dict__``, ``x.__getattribute__(...)`` and
+    ``object.__getattribute__(x, ...)`` where ``x`` is an importlib/builtins alias or a ``sys.modules`` lookup.
+    """
+
+    def guarded(target: Optional[ast.AST]) -> bool:
+        return _is_guarded_target(target, aliases, sys_names, modules_names)
+
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in ("vars", "getattr"):
+        target = node.args[0] if node.args else None
+        literal = len(node.args) > 1 and _is_literal(node.args[1])
+        if guarded(target) and (node.func.id == "vars" or not literal):
+            return f"{node.func.id}() over an importlib/builtins module"
+    if isinstance(node, ast.Attribute) and node.attr in ("__dict__", "__getattribute__"):
+        if guarded(node.value):
+            return f"{node.attr} of an importlib/builtins module"
+        call = parents.get(node)
+        if (
+            node.attr == "__getattribute__"
+            and isinstance(call, ast.Call)
+            and call.func is node
+            and call.args
+            and guarded(call.args[0])
+        ):
+            return "__getattribute__ over an importlib/builtins module"
+    return ""
+
+
+def _banned(module: str) -> bool:
+    """Return whether a dotted module path is a banned module or lies below one."""
+    return any(module == banned or module.startswith(f"{banned}.") for banned in _BANNED_MODULES)
 
 
 def _module_violations(relative: str, node: ast.AST) -> list[str]:
@@ -157,13 +284,13 @@ def _module_violations(relative: str, node: ast.AST) -> list[str]:
     found: list[str] = []
     if isinstance(node, ast.Import):
         for alias in node.names:
-            if alias.name in _BANNED_MODULES:
+            if _banned(alias.name):
                 found.append(f"{relative}:{node.lineno}: import of {alias.name}")
     elif isinstance(node, ast.ImportFrom):
-        module = node.module or ""
+        module = "" if node.level else (node.module or "")
         for alias in node.names:
             dotted = f"{module}.{alias.name}"
-            if module in _BANNED_MODULES or dotted in _BANNED_MODULES:
+            if module and (_banned(module) or _banned(dotted)):
                 found.append(f"{relative}:{node.lineno}: import from {dotted}")
             elif alias.name in _DYNAMIC_NAMES or (alias.name == "*" and module.startswith(("importlib", "builtins"))):
                 found.append(f"{relative}:{node.lineno}: from-import of a dynamic import function")
@@ -233,24 +360,21 @@ def import_violations(relative: str, source: str) -> list[str]:
     owner = _scopes(tree)
     parents = _parents(tree)
     aliases = _importlib_aliases(tree)
+    sys_names, modules_names = _sys_aliases(tree)
     helper_module = relative == _HELPER_MODULE
     found: list[str] = _helper_violations(tree, relative, owner) if helper_module else []
+    found.extend(
+        f"{relative}:{line}: string literal naming {value}"
+        for line, value in _folded_strings(tree)
+        if value in _DYNAMIC_NAMES
+    )
     for node in ast.walk(tree):
         found.extend(_module_violations(relative, node))
-        if isinstance(node, ast.Constant) and isinstance(node.value, str) and node.value in _DYNAMIC_NAMES:
-            found.append(f"{relative}:{node.lineno}: string literal naming {node.value}")
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in ("vars", "getattr"):
-            target = node.args[0] if node.args else None
-            literal = len(node.args) > 1 and isinstance(node.args[1], ast.Constant)
-            if isinstance(target, ast.Name) and target.id in aliases and (node.func.id == "vars" or not literal):
-                found.append(f"{relative}:{node.lineno}: {node.func.id}() over an importlib module")
-        if (
-            isinstance(node, ast.Attribute)
-            and node.attr == "__dict__"
-            and isinstance(node.value, ast.Name)
-            and node.value.id in aliases
-        ):
-            found.append(f"{relative}:{node.lineno}: __dict__ of an importlib module")
+        reflection = _reflection_violation(node, parents, aliases, sys_names, modules_names)
+        if reflection:
+            found.append(f"{relative}:{node.lineno}: {reflection}")
+        if not helper_module and _sys_modules_violation(node, sys_names, modules_names):
+            found.append(f"{relative}:{node.lineno}: sys.modules lookup by a non-literal key outside the shared helper")
         name = _referenced_name(node)
         if not name:
             continue
@@ -423,6 +547,89 @@ _BYPASSES = {
     "pickle-loads": "import pickle\ndef f(b):\n    return pickle.loads(b)\n",
     "dunder-builtins": "def f(n):\n    return __builtins__['__import__'](n)\n",
 }
+
+
+#: Re-verification (2026-11-03, finding N4, auditor probe p12) bypasses, each seeded into ``reporting.py``.
+_BYPASSES_N4 = {
+    "importlib-reload": "import importlib\ndef f(m):\n    return importlib.reload(m)\n",
+    "from-importlib-reload": "from importlib import reload\ndef f(m):\n    return reload(m)\n",
+    "sys-modules-subscript": "import sys\ndef f(n):\n    return sys.modules[n]\n",
+    "sys-modules-get": "import sys\ndef f(n):\n    return sys.modules.get(n)\n",
+    "from-sys-modules-subscript": "from sys import modules as m\ndef f(n):\n    return m[n]\n",
+    "builtins-dict-folded": "import builtins\ndef f(n):\n    return builtins.__dict__['__imp' + 'ort__'](n)\n",
+    "getattr-builtins-folded": "import builtins\ndef f(n):\n    return getattr(builtins, '__imp' + 'ort__')(n)\n",
+    "getattr-sys-modules-entry": "import sys\ndef f(n, x):\n    return getattr(sys.modules['importlib'], x)(n)\n",
+    "object-getattribute": "import importlib\ndef f(n, x):\n    return object.__getattribute__(importlib, x)(n)\n",
+    "module-getattribute": "import importlib\ndef f(n, x):\n    return importlib.__getattribute__(x)(n)\n",
+    "ctypes-pyimport": "import ctypes\ndef f(n):\n    return ctypes.pythonapi.PyImport_ImportModule(n.encode())\n",
+    "ctypes-submodule": "import ctypes.util\ndef f(n):\n    return ctypes.util.find_library(n)\n",
+    "logging-dictconfig": (
+        "import logging.config\ndef f(n):\n    logging.config.dictConfig({'version': 1, 'handlers': {'h': {'()': n}}})\n"
+    ),
+    "site-addsitedir": "import site\ndef f(p):\n    site.addsitedir(p)\n",
+    "timeit": "import timeit\ndef f(s):\n    return timeit.timeit(s, number=1)\n",
+    "code-interpreter": "import code\ndef f(s):\n    code.InteractiveInterpreter().runsource(s)\n",
+    "cprofile-run": "import cProfile\ndef f(s):\n    cProfile.run(s)\n",
+    "shelve-open": "import shelve\ndef f(p):\n    return dict(shelve.open(p))\n",
+    "underscore-pickle": "import _pickle\ndef f(b):\n    return _pickle.loads(b)\n",
+    "source-loader-get-code": (
+        "import importlib.machinery, types\ndef f(p):\n"
+        "    c = importlib.machinery.SourceFileLoader('m', p).get_code('m')\n    types.FunctionType(c, {})()\n"
+    ),
+    "lazy-loader": "import importlib.util\ndef f(l):\n    return importlib.util.LazyLoader.factory(l)\n",
+    "attrgetter-folded": (
+        "import operator, importlib.machinery as m\ndef f(n):\n    return operator.attrgetter('find_' + 'spec')(m.PathFinder)(n)\n"
+    ),
+    "loader-getattr-folded": "def f(n):\n    L = __loader__\n    return getattr(L, 'load_' + 'module')(n)\n",
+}
+
+
+@pytest.mark.parametrize("snippet", list(_BYPASSES_N4.values()), ids=list(_BYPASSES_N4))
+def test_tripwire_catches_the_re_verification_bypasses(snippet: str):
+    """
+    [Unit] importlib tripwire: verifies each re-verification (N4) bypass spelling is reported (M3).
+
+    Scenario:
+        Given a module source using reload, a C-API or statement-runner module, a non-literal sys.modules lookup,
+            reflection over builtins/sys.modules, or a concatenated dynamic-import name
+        When the tripwire scans it as reporting.py
+        Then a violation is reported.
+
+    Boundaries:
+        - Focus: re-verification finding N4 (auditor probe p12)
+        - Fixtures/params: one bypass per case
+        - Scope: import_violations
+
+    On failure, first check:
+        - ``_DYNAMIC_NAMES``, ``_BANNED_MODULES``, ``_folded_strings`` and the reflection/sys.modules rules
+    """
+    assert import_violations("reporting.py", snippet)
+
+
+def test_sys_modules_rule_allows_literal_keys_and_the_helper_module():
+    """
+    [Unit] importlib tripwire: verifies a literal sys.modules key passes and the helper module may look up by name.
+
+    Scenario:
+        Given ``sys.modules['docsentinel']`` in reporting.py, and ``sys.modules.get(prefix)`` in the helper module
+        When the tripwire scans each
+        Then neither yields a sys.modules violation, while ``sys.modules[n]`` in reporting.py does.
+
+    Boundaries:
+        - Focus: re-verification finding N4 edge case (non-literal keys only, outside the helper module only)
+        - Fixtures/params: none
+        - Scope: import_violations
+
+    On failure, first check:
+        - ``_sys_modules_violation`` and the ``helper_module`` exemption in ``import_violations``
+    """
+    literal = import_violations("reporting.py", "import sys\nx = sys.modules['docsentinel']\n")
+    helper = import_violations(_HELPER_MODULE, "import sys\ndef g(prefix):\n    return sys.modules.get(prefix)\n")
+    dynamic = import_violations("reporting.py", "import sys\ndef g(n):\n    return sys.modules[n]\n")
+
+    assert literal == []
+    assert not [entry for entry in helper if "sys.modules" in entry]
+    assert [entry for entry in dynamic if "sys.modules" in entry]
 
 
 @pytest.mark.parametrize("snippet", list(_BYPASSES.values()), ids=list(_BYPASSES))
