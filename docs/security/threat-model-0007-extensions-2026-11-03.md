@@ -151,6 +151,24 @@ mitigations with an owning task.
     argv flag `--allow-repo-python-extensions` (owner decision D-B; recommended to
     offer it, off by default). Never mutate `sys.path` to do this: global state, and not
     safe for library callers.
+    - *Amendment 2026-11-03 (close-review of Task 01, BLOCK findings 1-3, 7):* the
+      boundary also includes the scan root's project root, which is the nearest
+      ancestor (the root included) holding `.git`, `docsentinel.toml`,
+      `doc_sentinel.toml` or `pyproject.toml`. Before any import, any `sys.path` entry
+      inside the boundary refuses every `python:` spec. `''` and relative entries are
+      resolved against the cwd. A prefix with no file location is refused unless it is
+      builtin or frozen. After the import, the factories, the hooks and the render,
+      a `sys.modules` before/after comparison fails the run (exit 2) when a new module
+      lies inside. This is detection after the fact: the planted module has already
+      run. `reporting.render` refuses a `python:` spec without `root=`. **Usability
+      exemption** (auditor-approved; owner-approved by default because it does not
+      reopen T2): a location or `sys.path` entry is never refused when both its
+      absolute and its real path are under the running interpreter's own
+      `site-packages` (`sysconfig` `purelib`/`platlib`). This covers a project-local
+      `.venv` of the running interpreter. `PYTHONPATH` entries, the user site,
+      editable `src/` directories added by `.pth` files and any `.venv` that is not the
+      running interpreter stay refused. Residual: files committed under that
+      `.venv/.../site-packages` path in the checkout are trusted (see R3).
   - Document: run the console script (not `python -m`), or `python -P`
     (`PYTHONSAFEPATH`); do not set `PYTHONPATH` to the checkout in untrusted-PR jobs.
   - `builtin:<name>` resolves through a **static** `dict` in
@@ -200,7 +218,7 @@ mitigations with an owning task.
     from the loaded extensions. They are never added to `loader.FILTERS` or
     `filters._FUNCTIONS`, and the existing `FILTER_NAMES == loader.FILTERS` parity test
     stays as it is. A name must be exactly `ext.<own name>.<filter>`, with `<filter>`
-    matching `[a-z_][a-z0-9_]{0,63}`; an extension cannot register a name under another
+    matching `[a-z][a-z0-9_]{0,63}`; an extension cannot register a name under another
     extension or a core name. Each filter has a declared arity (0 or 1 quoted literal)
     and declared input kinds, so the loader checks it at load time.
   - **M10.** At runtime an extension filter must return a JSON scalar (`str` / `int` /
@@ -582,13 +600,23 @@ Hand fixes to `python-expert` and the listed tests to `testing-expert`.
   `filters.neutralize`, `loader.FILTERS` or the exit path, and reach a
   `MappingProxyType`'s backing dict through `gc.get_referents`. M5-M17 protect against
   *data* and bugs, not against a malicious admitted extension. The trust boundary for
-  code is the gate (M1-M6) alone.
+  code is the gate (M1-M6) alone. Extensions run in selection order in one process, so
+  one extension can alter shared state that the next one sees. That state includes
+  `sys.modules`, module globals and the frozen model's backing dicts. (Amended
+  2026-11-03.)
 - **R2.** A single hook that never returns cannot be stopped in-process. The CI job
   timeout is the backstop.
 - **R3.** M6's origin check is a point-in-time check. A checkout that is modified during
   the scan, between `find_spec` and exec, is not covered (the same accepted TOCTOU class
   as TE-M11). `.pth` files, `sitecustomize` and `PYTHONPATH` set by the invoker are
-  outside DocSentinel's control.
+  outside DocSentinel's control. (Amended 2026-11-03.) A few cases are still out of
+  reach:
+  - the `sys.modules` before/after check detects a planted module only after it has
+    run, and skips entries that carry no location;
+  - modules under the running interpreter's `site-packages` are exempt, even when that
+    `.venv` lies inside the checkout and the checkout commits files there;
+  - the stdlib is not exempt, so running from a cwd that contains the interpreter (for
+    example `~` with a uv-managed Python) refuses `python:` extensions.
 - **R4.** pytest and pre-commit run repository code already, so the gate is moot in those
   contexts.
 - **R5.** `domain` labels are asserted by the repository (data integrity of aggregated

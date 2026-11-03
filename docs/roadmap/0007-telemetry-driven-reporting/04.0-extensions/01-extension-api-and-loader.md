@@ -57,7 +57,7 @@ must be callable; a missing hook is a no-op (M13).
   and 64 MiB (`MAX_OUTPUT_CHARS`) across all extensions. Rendering then charges
   extension values to the existing `_Budget` step/work/output budgets.
 - **Filters (M7-M10):** keys of `filters()` are full names, exactly
-  `ext.<own name>.<filter>` with `<filter>` matching `[a-z_][a-z0-9_]{0,63}`; any
+  `ext.<own name>.<filter>` with `<filter>` matching `[a-z][a-z0-9_]{0,63}`; any
   other key (a core name such as `neutralize`, or `ext.<other>.f`) is an
   `ExtensionError`. They live in an immutable per-render registry built from the
   loaded extensions and are **never** added to `loader.FILTERS` or
@@ -102,7 +102,15 @@ must be callable; a missing hook is a no-op (M13).
   `import_module`, `find_spec` or `sys.modules` lookup. An AST tripwire test
   enumerates every `importlib.import_module` call site under `src/docsentinel/`; only
   the helper and the fixed literal-argument sites in `deep_support.py`,
-  `contradictions.py` and `_triples.py` are allowed.
+  `contradictions.py` and `_triples.py` are allowed. *Amendment 2026-11-03:* the
+  tripwire flags every reference (not only calls) to a by-name import or code
+  execution name (`import_module`, `__import__`, `find_spec`, `resolve_name`,
+  `run_module`/`run_path`, `locate`, `entry_points`, `exec`, `eval`, ...), string
+  literals naming them, `getattr`/`vars`/`__dict__` over an `importlib` module, and
+  imports of `runpy`, `pydoc`, `pkgutil`, `importlib.metadata` and similar modules. The
+  helper must be module-level with the gate as its first statement, before every
+  gated reference. Allowed literal sites are listed as exact `(module, function,
+  literal)` entries.
 - **Target grammar (M5).** Module
   `^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*){0,15}$`, callable
   `^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*){0,3}$`, total length <= 256,
@@ -114,6 +122,20 @@ must be callable; a missing hook is a no-op (M13).
   Refuse (exit 2, nothing executed) when any origin or search location `realpath`s
   inside the scan root or the cwd; a namespace package is refused when any search
   location is inside. Never mutate `sys.path`.
+  - *Amendment 2026-11-03 (security close-review of Task 01).* The boundary is the
+    scan root, its project root (nearest ancestor, the root included, holding `.git`,
+    `docsentinel.toml`, `doc_sentinel.toml` or `pyproject.toml`) and the cwd. Before
+    any import, a `sys.path` entry (`''` = cwd) inside the boundary refuses every
+    `python:` spec. A prefix with no file location is refused unless it is builtin or
+    frozen. After the import, the factories, the report hooks and the render, any
+    module added to `sys.modules` since the first `python:` import whose location is
+    inside fails the run (exit 2; detection after the fact). `reporting.render` needs
+    `root=` for a `python:` spec. Exemption: a location or `sys.path` entry whose
+    absolute *and* real path are both under the running interpreter's own
+    `site-packages` (`sysconfig` `purelib`/`platlib`) is never refused, so a
+    project-local `.venv` of the running interpreter works. `PYTHONPATH` entries, the
+    user site, `.pth`-added directories (an editable `src/`) and any other `.venv`
+    stay refused.
 - **Builtins (M5).** `builtin:<name>` resolves through a static `dict` in
   `telemetry/builtin/__init__.py` (name -> fixed module/class). The user string is
   never interpolated into an `import_module` argument; an unknown name is refused

@@ -100,7 +100,9 @@ model. The trust model section states (threat model checklist item 13):
   `python:` entry in config is an error;
 - never set the gate env on jobs that run untrusted PR heads;
 - run the console script (not `python -m`) or `python -P`, and do not put the
-  checkout on `PYTHONPATH`; modules inside the scan root or cwd are refused;
+  checkout on `PYTHONPATH`; modules and `sys.path` entries inside the scan root, its
+  project root or cwd are refused (the running interpreter's own `site-packages`
+  is exempt, amended 2026-11-03);
 - residuals R1-R5: an admitted extension is full in-process code; a hook that never
   returns is bounded only by the CI job timeout; pytest and pre-commit already run
   repository code; `domain` is a repository-asserted label.

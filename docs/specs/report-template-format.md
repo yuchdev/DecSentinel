@@ -273,7 +273,7 @@ and `$for`/`over` on a non-list `any` is a `TemplateError`.
 
 Filters are pure functions `str -> str` (or the stated type) registered in a
 closed table; a template cannot define one. An extension may add filters named
-exactly `ext.<own name>.<filter>` (`<filter>` matching `[a-z_][a-z0-9_]{0,63}`), with
+exactly `ext.<own name>.<filter>` (`<filter>` matching `[a-z][a-z0-9_]{0,63}`), with
 a declared arity (0 or 1 quoted literal) and declared input kinds. They live in a
 per-render registry, never in the core table. An extension filter is **never a
 sink** and cannot declare itself one, and the output of any chain that contains an
