@@ -152,9 +152,10 @@ mitigations with an owning task.
     offer it, off by default). Never mutate `sys.path` to do this: global state, and not
     safe for library callers.
     - *Amendment 2026-11-03 (close-review of Task 01, BLOCK findings 1-3, 7):* the
-      boundary also includes the scan root's project root, which is the nearest
+      boundary also includes the scan root's project roots, which are every
       ancestor (the root included) holding `.git`, `docsentinel.toml`,
-      `doc_sentinel.toml` or `pyproject.toml`. Before any import, any `sys.path` entry
+      `doc_sentinel.toml` or `pyproject.toml` (amended 2026-11-03 by the
+      re-verification below: previously only the nearest). Before any import, any `sys.path` entry
       inside the boundary refuses every `python:` spec. `''` and relative entries are
       resolved against the cwd. A prefix with no file location is refused unless it is
       builtin or frozen. After the import, the factories, the hooks and the render,
@@ -169,6 +170,29 @@ mitigations with an owning task.
       editable `src/` directories added by `.pth` files and any `.venv` that is not the
       running interpreter stay refused. Residual: files committed under that
       `.venv/.../site-packages` path in the checkout are trusted (see R3).
+    - *Amendment 2026-11-03 (security re-verification of Task 01, findings N1-N3):*
+      - **N1.** Every marked ancestor of every spelling of the scan root (as given
+        and canonical) is a project root, walked up to the filesystem root and
+        bounded by 256 ancestors (past the bound: refused, never cut short). The
+        scanned repository controls the markers under its own top: with "nearest
+        ancestor", a `docs/.git` (even an empty file or a dangling link),
+        `docs/pyproject.toml`, `docs/docsentinel.toml` or a scan root that is a link
+        to `docs/` shrank the boundary to `<checkout>/docs` and dropped the checkout.
+        An extra marker can now only enlarge the boundary. This fails closed more
+        often: a marker high up the tree, for example a `~/.git` dotfiles
+        repository, puts all of `~` (the user site and a user-installed interpreter
+        included) inside the boundary, so `python:` extensions are refused there.
+      - **N2.** The `sys.path` check is prevention, not only a pre-import gate: it
+        runs again after every factory, before every report and event hook and at
+        every `sys.modules` check. An extension that adds the checkout (cwd, scan
+        root or a project root) to `sys.path`, at import time, in its factory or in
+        a hook, fails the run (exit 2) before a later import can resolve through
+        that entry. The `sys.modules` before/after check stays as best-effort
+        detection of accidental imports; it trusts the location a module reports
+        about itself, so a planted module that rewrites its own `__file__` /
+        `__spec__.origin` defeats it (R3).
+      - **N3.** The event path runs the `sys.modules` check after every event's
+        hooks, unconditionally (a size-only shortcut missed a replaced entry).
   - Document: run the console script (not `python -m`), or `python -P`
     (`PYTHONSAFEPATH`); do not set `PYTHONPATH` to the checkout in untrusted-PR jobs.
   - `builtin:<name>` resolves through a **static** `dict` in
@@ -603,7 +627,12 @@ Hand fixes to `python-expert` and the listed tests to `testing-expert`.
   code is the gate (M1-M6) alone. Extensions run in selection order in one process, so
   one extension can alter shared state that the next one sees. That state includes
   `sys.modules`, module globals and the frozen model's backing dicts. (Amended
-  2026-11-03.)
+  2026-11-03.) (Amended 2026-11-03, re-verification N3.) The `sys.modules` check
+  cannot see what an admitted extension hides from it; these need the extension's own
+  cooperation: importing a module and then deleting its `sys.modules` entry;
+  `spec_from_file_location` + `exec_module` without inserting the module;
+  `runpy.run_path`; scrubbing or rewriting a module's `__spec__`/`__file__`; and any
+  import-and-delete done inside a single hook.
 - **R2.** A single hook that never returns cannot be stopped in-process. The CI job
   timeout is the backstop.
 - **R3.** M6's origin check is a point-in-time check. A checkout that is modified during
@@ -611,8 +640,15 @@ Hand fixes to `python-expert` and the listed tests to `testing-expert`.
   as TE-M11). `.pth` files, `sitecustomize` and `PYTHONPATH` set by the invoker are
   outside DocSentinel's control. (Amended 2026-11-03.) A few cases are still out of
   reach:
-  - the `sys.modules` before/after check detects a planted module only after it has
-    run, and skips entries that carry no location;
+  - the `sys.modules` before/after check is best-effort detection of accidental
+    imports; it is defeated by a planted module that rewrites its own location
+    (`__file__`/`__spec__.origin`), it detects a planted module only after it has
+    run, and it skips entries that carry no location. (Amended 2026-11-03,
+    re-verification N2: an in-boundary `sys.path` entry is now refused before
+    later imports instead, see M6; the blind spots listed in R1 remain);
+  - every marked ancestor of the scan root is in the boundary (re-verification N1),
+    so a stray marker high up the tree (a `~/.git` dotfiles repository) refuses
+    `python:` extensions for everything below it;
   - modules under the running interpreter's `site-packages` are exempt, even when that
     `.venv` lies inside the checkout and the checkout commits files there;
   - the stdlib is not exempt, so running from a cwd that contains the interpreter (for

@@ -123,8 +123,9 @@ must be callable; a missing hook is a no-op (M13).
   inside the scan root or the cwd; a namespace package is refused when any search
   location is inside. Never mutate `sys.path`.
   - *Amendment 2026-11-03 (security close-review of Task 01).* The boundary is the
-    scan root, its project root (nearest ancestor, the root included, holding `.git`,
-    `docsentinel.toml`, `doc_sentinel.toml` or `pyproject.toml`) and the cwd. Before
+    scan root, its project roots (every marked ancestor, the root included, holding
+    `.git`, `docsentinel.toml`, `doc_sentinel.toml` or `pyproject.toml`; amended
+    2026-11-03 from "nearest ancestor", see below) and the cwd. Before
     any import, a `sys.path` entry (`''` = cwd) inside the boundary refuses every
     `python:` spec. A prefix with no file location is refused unless it is builtin or
     frozen. After the import, the factories, the report hooks and the render, any
@@ -136,6 +137,18 @@ must be callable; a missing hook is a no-op (M13).
     project-local `.venv` of the running interpreter works. `PYTHONPATH` entries, the
     user site, `.pth`-added directories (an editable `src/`) and any other `.venv`
     stay refused.
+  - *Amendment 2026-11-03 (security re-verification of Task 01, N1-N3).* Every marked
+    ancestor of every spelling of the scan root (as given and canonical) is a
+    project root, walked to the filesystem root and bounded by 256 ancestors
+    (refused past the bound), so a marker the repository plants under `docs/` can
+    never drop the checkout from the boundary; this fails closed more often (a
+    `~/.git` dotfiles repository puts all of `~` in the boundary). The `sys.path`
+    check runs again after every factory, before every report and event hook and
+    at every `sys.modules` check, so an extension that adds the checkout to
+    `sys.path` fails the run (exit 2) before a later import resolves through it.
+    The `sys.modules` check is best-effort detection of accidental imports,
+    defeated by a planted module that rewrites its own location, and runs
+    unconditionally on the event path.
 - **Builtins (M5).** `builtin:<name>` resolves through a static `dict` in
   `telemetry/builtin/__init__.py` (name -> fixed module/class). The user string is
   never interpolated into an `import_module` argument; an unknown name is refused
