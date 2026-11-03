@@ -441,24 +441,24 @@ def test_empty_result_has_empty_collections():
     assert all(doc["problems"] == [] for doc in context["documents"])
 
 
-def test_extensions_are_refused_until_implemented():
+def test_extensions_must_be_a_loaded_registry():
     """
-    [Unit] report model: verifies a non-empty extension list fails closed instead of being ignored.
+    [Unit] report model: verifies a non-empty extension value that is not a registry fails closed.
 
     Scenario:
-        Given an extension object
+        Given a bare extension object instead of a ``LoadedExtensions`` registry
         When the model is built with it
-        Then ``NotImplementedError`` is raised.
+        Then ``TypeError`` is raised rather than the value being ignored or its hooks run unvalidated.
 
     Boundaries:
-        - Focus: invalid-input handling of the not-yet-implemented extension hook
+        - Focus: invalid-input handling of ``ReportModel.build(extensions=...)`` (Story 04.0 Task 01)
         - Fixtures/params: none
         - Scope: in-memory model building
 
     On failure, first check:
         - The guard at the top of ``ReportModel.build``
     """
-    with pytest.raises(NotImplementedError):
+    with pytest.raises(TypeError, match="LoadedExtensions"):
         ReportModel.build(_result(), Config(), extensions=(object(),))
 
 

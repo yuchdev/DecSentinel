@@ -67,6 +67,23 @@ its every byte is hostile input. Mitigations implemented here:
   ``frozenset`` and ``MappingProxyType``; only packaged templates are cached, keyed
   by resolved resource path, ``mtime_ns`` and size.
 
+Extension data and filters (``docs/security/threat-model-0007-extensions-2026-11-03.md``):
+
+* **M11** -- ``ext`` (run, ``doc.ext``, ``p.ext``) resolves as an object whose
+  members are only the names in the template's ``requires_extensions``; every deeper
+  segment has the value kind ``any``, always untrusted, inherited by every
+  descendant and list element. ``ext.<name>`` itself is a container (it cannot be
+  emitted in text); an ``any`` value passes where a scalar or list is expected and
+  is checked at render time.
+* **M12** -- referencing ``ext.<n>...`` or a filter ``ext.<n>.<f>`` without listing
+  ``<n>`` in ``requires_extensions`` is a load-time error.
+* **M7/M8** -- an ``ext.<n>.<f>`` filter is never a sink, and the output of any
+  chain that contains one is untrusted whatever its input, so the chain must still
+  end with a core sink and obey every ``github`` rule. Its arity and input kind are
+  recorded in :attr:`Template.extension_filters` and checked against the loaded
+  registry by :func:`docsentinel.telemetry.extensions.check_template` before the
+  scan; extension filters never enter :data:`FILTERS`.
+
 ``neutralize``, :class:`TemplateError` and :data:`MAX_MESSAGE` come from
 :mod:`docsentinel.telemetry.filters` (Task 02), the stdlib-only bottom layer, and are
 re-exported here so ``loader.TemplateError`` keeps working. This module is
@@ -173,10 +190,21 @@ _GHA_COMMAND_PATTERN = re.compile(r" *::(?:error|warning|notice|debug|group)(?: 
 
 _UTF8_BOM = b"\xef\xbb\xbf"
 
-#: Value kinds tracked through a filter chain.
+#: Value kinds tracked through a filter chain; ``any`` is extension data (M11).
 _SCALAR = "scalar"
 _LIST = "list"
 _DICT = "dict"
+_ANY = "any"
+
+#: Schema type descriptors of extension data (M11): the ``ext`` object, one
+#: extension's subtree, and any value below it.
+_TYPE_EXT = "ext"
+_TYPE_EXT_MEMBER = "ext_member"
+_TYPE_ANY = "any"
+
+#: Prefix of an extension filter name, ``ext.<extension>.<filter>`` (spec §7).
+_EXT_FILTER_PREFIX = "ext."
+_EXT_FILTER_LEAF_PATTERN = re.compile(r"[a-z_][a-z0-9_]{0,63}")
 
 
 def _echo(value: str) -> str:
@@ -509,6 +537,9 @@ class Template:
     :ivar origin: ``packaged``, ``directory``, ``path`` or ``mapping``; lets a caller
         note a non-packaged template in use.
     :ivar source: The source as configured or named (never a resolved absolute path).
+    :ivar extension_filters: Every distinct extension filter use as
+        ``(name, argument count, input kind)``, in first-use order; bound to the
+        loaded registry before the scan (M9, M30).
     """
 
     template_version: int
@@ -522,6 +553,7 @@ class Template:
     schema_version: Optional[int] = None
     origin: str = "mapping"
     source: str = "<mapping>"
+    extension_filters: tuple[tuple[str, int, str], ...] = ()
 
 
 # --------------------------------------------------------------------------- filter table
@@ -569,8 +601,12 @@ def _kind(var: Variable) -> str:
     """Return the value kind of a schema variable.
 
     :param var: The schema entry.
-    :returns: ``list``, ``dict`` or ``scalar``.
+    :returns: ``list``, ``dict``, ``any`` (extension data below ``ext.<name>``) or ``scalar``.
     """
+    if var.type == _TYPE_ANY:
+        return _ANY
+    if var.type in (_TYPE_EXT, _TYPE_EXT_MEMBER):
+        return _DICT
     if var.type.startswith("list["):
         return _LIST
     if var.type.startswith("dict[") or var.type == "object":
@@ -581,9 +617,11 @@ def _kind(var: Variable) -> str:
 def _element(var: Variable) -> Variable:
     """Return the element schema of a list variable; it inherits the list's trust (M1).
 
-    :param var: A list schema entry.
+    :param var: A list schema entry (or an ``any`` value iterated at render time).
     :returns: The element schema.
     """
+    if var.type == _TYPE_ANY:
+        return Variable(_TYPE_ANY, UNTRUSTED)
     if var.fields:
         return Variable("object", var.trust, var.fields)
     return Variable(var.type[len("list[") : -1], var.trust)
@@ -753,6 +791,8 @@ class _Validator:
         self._nodes = 0
         self._type = ""
         self._sink = SINK_TERMINAL
+        self._requires: frozenset[str] = frozenset()
+        self._extension_filters: dict[tuple[str, int, str], None] = {}
 
     # ---- errors and generic shape checks
 
@@ -847,12 +887,22 @@ class _Validator:
             raise self.fail("name", "name must be kebab-case ([a-z0-9] runs joined by '-')")
         description = self._string(obj.get("description", ""), "description")
         requires = self._extensions(obj.get("requires_extensions", []))
+        self._requires = frozenset(requires)
         if kind == "text":
             output = self._text_output(obj.get("output", {}))
             self._sink = output.sink
             lines = self._text_nodes(obj["lines"], "lines", CONTEXT_SCHEMA, 1, 0)
             return Template(
-                TEMPLATE_VERSION, name, kind, description, requires, output, lines, origin=origin, source=source
+                TEMPLATE_VERSION,
+                name,
+                kind,
+                description,
+                requires,
+                output,
+                lines,
+                origin=origin,
+                source=source,
+                extension_filters=tuple(self._extension_filters),
             )
         schema_version = obj.get("schema_version", 1)
         if type(schema_version) is not int or not 1 <= schema_version <= _MAX_SCHEMA_VERSION:
@@ -870,6 +920,7 @@ class _Validator:
             schema_version=schema_version,
             origin=origin,
             source=source,
+            extension_filters=tuple(self._extension_filters),
         )
 
     def _extensions(self, raw: Any) -> tuple[str, ...]:
@@ -958,7 +1009,11 @@ class _Validator:
             raise self.fail(where, f"unknown variable: {_echo(ref.name)}")
         for step in ref.path[1:]:
             kind = _kind(current)
-            if kind == _LIST and isinstance(step, int):
+            if current.type == _TYPE_EXT:
+                current = self._extension_member(ref, step, where)
+            elif current.type in (_TYPE_EXT_MEMBER, _TYPE_ANY) and (isinstance(step, str) or current.type == _TYPE_ANY):
+                current = Variable(_TYPE_ANY, UNTRUSTED)
+            elif kind == _LIST and isinstance(step, int):
                 current = _element(current)
             elif kind == _DICT and isinstance(step, str) and current.fields:
                 member = current.fields.get(step)
@@ -971,6 +1026,40 @@ class _Validator:
             else:
                 raise self.fail(where, f"unknown variable: {_echo(ref.name)}")
         return current
+
+    def _extension_member(self, ref: VarRef, step: Union[str, int], where: str) -> Variable:
+        """Resolve ``ext.<name>``: only a name listed in ``requires_extensions`` (M11, M12).
+
+        :param ref: The reference, for errors.
+        :param step: The segment after ``ext``.
+        :param where: The JSON path for errors.
+        :returns: The untrusted schema entry of that extension's subtree.
+        """
+        if not isinstance(step, str) or _EXTENSION_PATTERN.fullmatch(step) is None:
+            raise self.fail(where, f"unknown variable: {_echo(ref.name)}")
+        if step not in self._requires:
+            raise self.fail(where, f"{_echo(ref.name)} needs extension {_echo(step)} listed in requires_extensions")
+        return Variable(_TYPE_EXT_MEMBER, UNTRUSTED)
+
+    def _extension_filter(self, call: FilterCall, kind: str, where: str):
+        """Check an ``ext.<name>.<filter>`` call and record its use (M7-M9, M12).
+
+        :param call: The filter call.
+        :param kind: The value kind it receives.
+        :param where: The JSON path for errors.
+        """
+        segments = call.name.split(".")
+        if (
+            len(segments) != 3
+            or _EXTENSION_PATTERN.fullmatch(segments[1]) is None
+            or _EXT_FILTER_LEAF_PATTERN.fullmatch(segments[2]) is None
+        ):
+            raise self.fail(where, f"unknown filter: {_echo(call.name)}")
+        if segments[1] not in self._requires:
+            raise self.fail(
+                where, f"filter {_echo(call.name)} needs extension {_echo(segments[1])} listed in requires_extensions"
+            )
+        self._extension_filters.setdefault((call.name, len(call.args), kind), None)
 
     def _plain_ref(self, raw: Any, where: str, scope: Scope) -> tuple[VarRef, Variable]:
         """Parse and resolve a filter-free variable (``over``, ``var``, ``$var``, ``$for``).
@@ -1008,7 +1097,7 @@ class _Validator:
         :returns: The reference and its element schema.
         """
         ref, var = self._plain_ref(raw, where, scope)
-        if _kind(var) != _LIST:
+        if _kind(var) not in (_LIST, _ANY):
             raise self.fail(where, f"loop variable is not a list: {_echo(ref.name)}")
         return ref, _element(var)
 
@@ -1129,17 +1218,26 @@ class _Validator:
         var = self._resolve(ref, scope, where)
         kind = _kind(var)
         element_kind = _kind(_element(var)) if kind == _LIST else None
+        # M8: the output of a chain holding an extension filter is untrusted.
+        tainted = False
         for call in ref.filters:
+            if call.name.startswith(_EXT_FILTER_PREFIX):
+                self._extension_filter(call, kind, where)
+                tainted = True
+                kind = _SCALAR
+                element_kind = None
+                continue
             spec = FILTERS.get(call.name)
             if spec is None:
                 raise self.fail(where, f"unknown filter: {_echo(call.name)}")
             if len(call.args) != spec.arity:
                 raise self.fail(where, f"filter {call.name} takes {spec.arity} argument(s)")
-            if kind not in spec.accepts or (spec.scalar_elements and element_kind != _SCALAR):
+            # An ``any`` value (M11) is checked by the filter at render time.
+            if kind != _ANY and (kind not in spec.accepts or (spec.scalar_elements and element_kind != _SCALAR)):
                 raise self.fail(where, f"filter {call.name} cannot take the {kind} value of {_echo(ref.name)}")
             kind = _SCALAR
             element_kind = None
-        if kind != _SCALAR:
+        if kind not in (_SCALAR, _ANY):
             raise self.fail(where, f"{_echo(ref.name)} is a {kind}; reduce it with join, len or json before output")
         if self._type != "text":
             return
@@ -1148,9 +1246,9 @@ class _Validator:
         # trusted ``model`` id may carry ``:``), must be escaped for that segment.
         if property_segment and last != "gha_property":
             raise self.fail(where, f"variable {_echo(ref.name)} in a command property needs gha_property")
-        if not _untrusted(var):
+        if not tainted and not _untrusted(var):
             return
-        if not last or self._sink not in FILTERS[last].sinks:
+        if not last or last not in FILTERS or self._sink not in FILTERS[last].sinks:
             raise self.fail(
                 where,
                 f"untrusted variable {_echo(ref.name)} must end its filter chain with a {self._sink} sink filter",
@@ -1334,7 +1432,7 @@ class _Validator:
             if operand is not True:
                 raise self.fail(at, f"{op} takes the value true")
             return Compare(ref, op, True)
-        if _kind(var) != _SCALAR:
+        if _kind(var) not in (_SCALAR, _ANY):
             raise self.fail(at, f"{op} needs a scalar variable; {_echo(ref.name)} is a {_kind(var)}")
         if op in ("gt", "lt"):
             if type(operand) not in (int, float):

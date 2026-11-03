@@ -84,10 +84,20 @@ _CONFIG_OPTIONS = {
     "report_templates_dir",
     "report_show_clean_documents",
     "report_include_run_meta",
+    # Milestone 0007 Story 04.0 — report extensions (builtin-only in config).
+    "telemetry_extensions",
 }
 # Standalone config file names accepted at the scan root: the preferred name first, then the alias.
 STANDALONE_CONFIG_NAMES = ("docsentinel.toml", "doc_sentinel.toml")
 _SELECTOR_PATTERN = re.compile(r"DS\d*")
+
+#: A ``telemetry_extensions`` entry: ``builtin:`` plus an extension name matching
+#: ``docsentinel.telemetry.extensions.EXTENSION_NAME_PATTERN`` (a test pins parity).
+#: Configuration may name only builtin extensions (threat model 0007-extensions M1).
+_BUILTIN_EXTENSION_SPEC_PATTERN = re.compile(r"builtin:[a-z][a-z0-9_]{0,63}")
+
+#: Most ``telemetry_extensions`` entries accepted.
+MAX_TELEMETRY_EXTENSIONS = 32
 
 # A ``document_id_field`` (the frontmatter key DS114 reads) must be a simple,
 # identifier-like key name, bounded in length so a pathological config value can
@@ -261,6 +271,10 @@ class Config:
         without problems (``--show-clean-documents``).
     :ivar report_include_run_meta: Whether the report context carries the per-run
         ``run.generated_at``/``run.id`` values; off keeps reports deterministic.
+    :ivar telemetry_extensions: Report extension specs, ``builtin:<name>`` only
+        (threat model 0007-extensions M1): a ``python:`` spec is accepted only from
+        the command line, never from configuration. The extension resolver
+        re-checks an injected ``Config`` with :func:`validate_telemetry_extensions`.
     """
 
     include: tuple[str, ...] = ("*.md", "**/*.md")
@@ -325,6 +339,38 @@ class Config:
     report_templates_dir: Optional[str] = None
     report_show_clean_documents: bool = False
     report_include_run_meta: bool = False
+    telemetry_extensions: tuple[str, ...] = ()
+
+
+def validate_telemetry_extensions(value: object) -> tuple[str, ...]:
+    """Return the validated ``telemetry_extensions`` entries, builtin specs only (M1).
+
+    Every entry must be ``builtin:<name>``; any other entry, every ``python:`` spec
+    included, is refused whatever the trust gate says, so a scanned repository's
+    configuration can never choose code to execute. The rejected value is never
+    echoed: it is repository-controlled.
+
+    :param value: The configured list (a ``list`` from TOML, or the ``tuple`` of an
+        injected :class:`Config`).
+    :returns: The entries as a tuple, in configured order.
+    :raises ConfigError: For a non-list, more than :data:`MAX_TELEMETRY_EXTENSIONS`
+        entries, a non-``builtin:`` or malformed entry, or a duplicate entry.
+    """
+    if not isinstance(value, (list, tuple)):
+        raise ConfigError("telemetry_extensions must be a list of builtin:<name> extension specs")
+    if len(value) > MAX_TELEMETRY_EXTENSIONS:
+        raise ConfigError(f"telemetry_extensions holds more than {MAX_TELEMETRY_EXTENSIONS} entries")
+    seen: set[str] = set()
+    for position, item in enumerate(value):
+        if type(item) is not str or _BUILTIN_EXTENSION_SPEC_PATTERN.fullmatch(item) is None:
+            raise ConfigError(
+                f"telemetry_extensions[{position}] is not a builtin:<name> spec; configuration may name only "
+                "builtin extensions"
+            )
+        if item in seen:
+            raise ConfigError(f"telemetry_extensions[{position}] repeats an earlier entry")
+        seen.add(item)
+    return tuple(value)
 
 
 def _require_bool(name: str, value: object) -> bool:
@@ -631,5 +677,9 @@ def _load_extra_options(options: dict[str, object], defaults: Config) -> dict[st
         if not _is_within_root(templates_dir):
             raise ConfigError("report_templates_dir must stay within the scan root")
     extra["report_templates_dir"] = templates_dir
+
+    extra["telemetry_extensions"] = validate_telemetry_extensions(
+        options.get("telemetry_extensions", list(defaults.telemetry_extensions))
+    )
 
     return extra

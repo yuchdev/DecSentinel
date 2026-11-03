@@ -1,6 +1,7 @@
 """Command-line access to the shared scan engine."""
 
 import argparse
+import os
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -15,6 +16,7 @@ from docsentinel.errors import ExtraNotInstalledError
 from docsentinel.models import ScanResult
 from docsentinel.reporting import neutralize_text, render
 from docsentinel.rules import Rule, rules_for_profile
+from docsentinel.telemetry.extensions import ExtensionError, LoadedExtensions, check_template, resolve_extensions
 from docsentinel.telemetry.filters import TemplateError
 from docsentinel.telemetry.loader import (
     DEFAULT_TEMPLATE,
@@ -158,6 +160,61 @@ def _doctor_template_lines() -> list[str]:
     return lines
 
 
+#: The environment form of ``--allow-python-extensions``; only the exact value ``"1"``
+#: opens the gate (threat model 0007-extensions M2). Only this module reads it.
+ALLOW_PYTHON_EXTENSIONS_ENV = "DOCSENTINEL_ALLOW_PYTHON_EXTENSIONS"
+
+
+def _python_extensions_allowed(flag: bool) -> bool:
+    """Return the ``python:`` extension gate decision (M2).
+
+    :param flag: Whether ``--allow-python-extensions`` was given.
+    :returns: ``True`` for the flag, or the environment variable set to exactly ``"1"``
+        (``true``, ``yes``, ``" 1"``, ``"1 "`` and an empty value are refused).
+    """
+    return flag is True or os.environ.get(ALLOW_PYTHON_EXTENSIONS_ENV) == "1"
+
+
+def _report_extensions(specs: list[str], settings: Config, root: Path, *, allow_python: bool) -> LoadedExtensions:
+    """Resolve the report extensions before the template and the scan (M30).
+
+    Config entries come first (builtin only), then the ``--extension`` specs in
+    order. Nothing is imported for a ``builtin:`` spec; a ``python:`` spec passes the
+    gate and the origin check of the shared importlib helper.
+
+    :param specs: The ``--extension`` values.
+    :param settings: The effective configuration.
+    :param root: The scan root directory (refused as a module origin, M6).
+    :param allow_python: The gate decision.
+    :returns: The validated registry.
+    :raises ConfigError: For a non-builtin ``telemetry_extensions`` entry.
+    :raises ExtensionError: For a refused, unknown, duplicate or failing extension.
+    """
+    return resolve_extensions(tuple(specs), config=settings, allow_python=allow_python, root=root, cwd=Path.cwd())
+
+
+def _doctor_extension_lines() -> list[str]:
+    """Return the ``doctor`` lines describing report extensions, without importing any (M32).
+
+    Lists the ``telemetry_extensions`` of the configuration discovered in the
+    current directory (neutralized) and the ``python:`` gate state. A configuration
+    error -- such as a ``python:`` entry, which configuration may never hold -- is
+    reported on one neutralized line.
+
+    :returns: The formatted lines.
+    """
+    gate = "on" if _python_extensions_allowed(False) else "off"
+    lines = [f"python extensions gate: {gate} (--allow-python-extensions or {ALLOW_PYTHON_EXTENSIONS_ENV}=1)"]
+    try:
+        settings = load_config(Path.cwd())
+    except (ConfigError, OSError) as exc:
+        lines.append(f"report extensions (telemetry_extensions): error: {neutralize_text(str(exc))}")
+        return lines
+    listed = ", ".join(neutralize_text(spec[:80]) for spec in settings.telemetry_extensions)
+    lines.append(f"report extensions (telemetry_extensions): {listed or '(none)'}")
+    return lines
+
+
 PROJECT_ROOT_MARKERS = ("uv.lock", "pyproject.toml")
 
 
@@ -274,6 +331,22 @@ def main(argv: Optional[list[str]] = None) -> int:
         action="store_true",
         help="List documents without problems in the text report as well",
     )
+    scan_parser.add_argument(
+        "--extension",
+        action="append",
+        default=[],
+        dest="extensions",
+        metavar="SPEC",
+        help="Report extension: builtin:<name>, or python:<module>:<callable> (needs --allow-python-extensions)",
+    )
+    scan_parser.add_argument(
+        "--allow-python-extensions",
+        action="store_true",
+        help=(
+            "Allow python: extensions given with --extension to run (they execute arbitrary code); "
+            f"also {ALLOW_PYTHON_EXTENSIONS_ENV}=1"
+        ),
+    )
     scan_parser.add_argument("--strict", action="store_true")
     scan_parser.add_argument(
         "--i-understand-deep-is-heuristic",
@@ -336,6 +409,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             print(summary)
         for line in _doctor_template_lines():
             print(line)
+        for line in _doctor_extension_lines():
+            print(line)
         return 0
     if args.command == "baseline":
         try:
@@ -380,10 +455,18 @@ def main(argv: Optional[list[str]] = None) -> int:
             changes["report_show_clean_documents"] = True
         if changes:
             settings = replace(settings, **changes)
+        # M30 order: gate and resolve extensions -> template -> requires check -> scan.
+        allow_python = _python_extensions_allowed(args.allow_python_extensions)
+        loaded = _report_extensions(args.extensions, settings, directory, allow_python=allow_python)
+        if loaded.builtin_specs != settings.telemetry_extensions:
+            settings = replace(settings, telemetry_extensions=loaded.builtin_specs)
         template = _report_template(args.format, args.template, settings, directory)
+        check_template(template, loaded)
         result = scan(args.root, config=settings)
-        report = render(result, config=settings, template=template, root=directory, strict=args.strict)
-    except (ConfigError, ValueError, OSError, TemplateError, NotImplementedError) as exc:
+        report = render(
+            result, config=settings, template=template, root=directory, strict=args.strict, extensions=loaded
+        )
+    except (ConfigError, ExtensionError, ValueError, OSError, TemplateError, NotImplementedError) as exc:
         print(f"Scan failed: {neutralize_text(str(exc))}", file=sys.stderr)
         return 2
     print(report)

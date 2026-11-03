@@ -70,6 +70,13 @@ Security contract (``docs/security/threat-model-0007-template-engine-2026-10-31.
   a :class:`TemplateError` rather than output.
 * **Purity** -- rendering performs no I/O and never reads files, environment
   variables or the clock (a mock test patches all three to raise).
+* **Extension filters** (threat model 0007-extensions M9, M10) -- an
+  ``ext.<name>.<filter>`` call is looked up only in the per-render registry passed
+  as ``extensions`` (never in the core filter table). Each call costs one step, its
+  container input is charged to :data:`MAX_WORK_CHARS` before it is frozen, and its
+  result -- an exact JSON scalar, checked by
+  :class:`~docsentinel.telemetry.extensions.BoundFilter` -- is charged too; any
+  failure is a bounded :class:`TemplateError`.
 """
 
 from __future__ import annotations
@@ -79,8 +86,15 @@ import math
 from collections.abc import Mapping, Sequence
 from json.encoder import encode_basestring_ascii
 from types import MappingProxyType
-from typing import Any, Final, Optional
+from typing import Any, Final, Optional, Union
 
+from docsentinel.telemetry.extensions import (
+    EXT_FILTER_PREFIX,
+    BoundFilter,
+    LoadedExtensions,
+    check_template,
+    missing_extensions_message,
+)
 from docsentinel.telemetry.filters import JSON_FILTER, TemplateError, apply_filter, neutralize, to_text
 from docsentinel.telemetry.loader import (
     PLACEMENT_APPEND,
@@ -638,12 +652,14 @@ class _Lines:
 class _Renderer:
     """One render pass over a fixed context; loop aliases are bound in place."""
 
-    def __init__(self, context: Mapping[str, JsonValue]):
-        """Bind the context.
+    def __init__(self, context: Mapping[str, JsonValue], extension_filters: Mapping[str, BoundFilter]):
+        """Bind the context and the per-render extension filter registry.
 
         :param context: The checked, JSON-shaped context.
+        :param extension_filters: Full name -> bound extension filter (M9).
         """
         self._context = context
+        self._extension_filters = extension_filters
         self._aliases: dict[str, JsonValue] = {}
         self._budget = _Budget()
         self._sizes: dict[int, tuple[JsonValue, int]] = {}
@@ -720,14 +736,34 @@ class _Renderer:
         self._budget.step()
         for call in ref.filters:
             self._budget.step()
-            self._budget.reserve(self._estimate(call.name, value, call.args))
             try:
-                value = apply_filter(call.name, value, call.args)
+                if call.name.startswith(EXT_FILTER_PREFIX):
+                    value = self._extension_filter(call.name, value, call.args)
+                else:
+                    self._budget.reserve(self._estimate(call.name, value, call.args))
+                    value = apply_filter(call.name, value, call.args)
             except TemplateError as exc:
                 raise TemplateError(f"variable {_echo_name(ref)}: {exc}") from None
             if isinstance(value, str):
                 self._budget.build(len(value))
         return value
+
+    def _extension_filter(self, name: str, value: JsonValue, args: tuple[str, ...]) -> JsonValue:
+        """Apply one registered extension filter (M10).
+
+        :param name: The full ``ext.<name>.<filter>`` name.
+        :param value: Its input.
+        :param args: Its literal arguments.
+        :returns: The exact JSON scalar it returned.
+        :raises TemplateError: When the filter is not registered, fails, or returns
+            anything but a JSON scalar.
+        """
+        bound = self._extension_filters.get(name)
+        if bound is None:
+            raise TemplateError("extension filter is not registered by a loaded extension")
+        if isinstance(value, (dict, list)):
+            self._budget.build(_size(value, MAX_WORK_CHARS, self._sizes))
+        return bound(value, args)
 
     def _interpolate(self, text: Interpolation) -> str:
         """Render an interpolation in a single pass (M14), charging each piece (R1).
@@ -1007,27 +1043,38 @@ class _Renderer:
         return value
 
 
-def _check_extensions(template: Template, extensions: Sequence[str]):
-    """Check every extension the template requires is loaded (spec §2, §10).
+def _check_extensions(
+    template: Template, extensions: Union[LoadedExtensions, Sequence[str]]
+) -> Mapping[str, BoundFilter]:
+    """Check every extension the template requires is loaded (spec §2, §10; M30, M31).
 
     :param template: The template.
-    :param extensions: Names of the loaded extensions.
-    :raises TemplateError: When a required extension is missing.
+    :param extensions: The loaded registry, or bare names of loaded extensions (a
+        name list carries no filters, so a template using an extension filter needs
+        the registry).
+    :returns: The registry's extension filters (empty for a name list).
+    :raises TemplateError: When a required extension or a used extension filter is
+        missing.
     """
+    if isinstance(extensions, LoadedExtensions):
+        check_template(template, extensions)
+        return extensions.filters
     if isinstance(extensions, str) or not all(isinstance(name, str) for name in extensions):
         raise TemplateError("extensions must be a sequence of extension names")
     loaded = frozenset(extensions)
     missing = [name for name in template.requires_extensions if name not in loaded]
     if missing:
-        listed = ", ".join(neutralize(name[:_MAX_NAME_ECHO]) for name in missing[:5])
-        raise TemplateError(f"template requires extension(s) that are not loaded: {listed}")
+        raise TemplateError(missing_extensions_message(missing))
+    if template.extension_filters:
+        raise TemplateError("template uses extension filters; pass the loaded extension registry")
+    return MappingProxyType({})
 
 
 def render_template(
     template: Template,
     context: Mapping[str, JsonValue],
     *,
-    extensions: Sequence[str] = (),
+    extensions: Union[LoadedExtensions, Sequence[str]] = (),
 ) -> str:
     """Render a validated template against a JSON-shaped context (Task 02 contract).
 
@@ -1036,7 +1083,9 @@ def render_template(
         :func:`~docsentinel.telemetry.loader.validate_template`.
     :param context: The context tree, e.g. from
         :meth:`~docsentinel.telemetry.model.ReportModel.build`; it is read, never mutated.
-    :param extensions: Names of the loaded extensions (spec §9; none exist yet).
+    :param extensions: The loaded extension registry from
+        :func:`~docsentinel.telemetry.extensions.resolve_extensions` (names and
+        filters of the same registry), or bare names of loaded extensions.
     :returns: The rendered report; identical bytes for identical inputs.
     :raises TemplateError: For a non-template, a missing required extension, a
         context that is not JSON-shaped, an absent variable, a filter given the wrong
@@ -1046,10 +1095,10 @@ def render_template(
     """
     if not isinstance(template, Template):
         raise TemplateError("render_template needs a validated Template")
-    _check_extensions(template, extensions)
+    extension_filters = _check_extensions(template, extensions)
     try:
         _check_context(context)
-        renderer = _Renderer(MappingProxyType(context))
+        renderer = _Renderer(MappingProxyType(context), extension_filters)
         if template.type == TYPE_TEXT:
             return renderer.text(template)
         if template.type == TYPE_JSON:

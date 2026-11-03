@@ -13,15 +13,21 @@ scanned repository content and are untrusted. The templates route them through t
 sink filters of :mod:`docsentinel.telemetry.filters`, and the loader refuses a text
 template that would emit one unfiltered. Baseline fingerprints hash the raw
 :class:`~docsentinel.models.Finding` fields, never rendered output.
+
+Extensions (spec §9) are resolved here only from explicit arguments: ``render``
+never reads the environment, and a ``python:`` spec runs only when the caller passes
+``allow_python_extensions=True`` (threat model 0007-extensions M2).
 """
 
 import os
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Optional, Union
 
 from docsentinel.config import Config
 from docsentinel.models import ScanResult
 from docsentinel.telemetry.engine import render_template
+from docsentinel.telemetry.extensions import LoadedExtensions, check_template, resolve_extensions
 from docsentinel.telemetry.filters import TemplateError
 from docsentinel.telemetry.filters import neutralize as _neutralize
 from docsentinel.telemetry.loader import DEFAULT_TEMPLATE, Template, load_named_template, load_template
@@ -73,6 +79,8 @@ def render(
     template: Union[Template, str, os.PathLike[str], None] = None,
     root: Optional[Path] = None,
     strict: bool = False,
+    extensions: Union[Sequence[str], LoadedExtensions] = (),
+    allow_python_extensions: bool = False,
 ) -> str:
     """Render a scan result through a report template.
 
@@ -90,23 +98,47 @@ def render(
     :param template: A template or template file path; wins over ``format``.
     :param root: The scan root ``report_templates_dir`` is resolved against.
     :param strict: Whether warnings are blocking (``--strict``); feeds ``outcome``.
+    :param extensions: Extension specs equivalent to ``--extension`` (``builtin:<name>``
+        or ``python:<module>:<callable>``), resolved after ``config.telemetry_extensions``;
+        or a registry already resolved by
+        :func:`~docsentinel.telemetry.extensions.resolve_extensions` (as the CLI does
+        before the scan), used as-is.
+    :param allow_python_extensions: The explicit trust gate for ``python:`` specs;
+        never taken from the environment.
     :returns: The rendered report.
     :raises ValueError: If the template is unknown, unreadable, invalid, needs an
         extension that is not loaded, or fails to render; the message is bounded and
         neutralized, and the :class:`~docsentinel.telemetry.filters.TemplateError`
         is chained as the cause.
+    :raises docsentinel.telemetry.extensions.ExtensionError: If an extension is
+        refused, cannot be loaded, or fails (a ``ValueError``; bounded message).
+    :raises docsentinel.config.ConfigError: If ``config.telemetry_extensions`` holds a
+        non-``builtin:`` entry.
     """
     settings = config if config is not None else Config()
+    if isinstance(extensions, LoadedExtensions):
+        loaded = extensions
+    else:
+        anchor = Path(root) if root is not None else Path.cwd()
+        loaded = resolve_extensions(
+            extensions,
+            config=settings,
+            allow_python=allow_python_extensions,
+            root=anchor,
+            cwd=Path.cwd(),
+        )
     try:
         chosen = _resolve(format, template, settings, root)
+        check_template(chosen, loaded)
         context = ReportModel.build(
             result,
             settings,
+            extensions=loaded,
             strict=strict,
             report_include_run_meta=settings.report_include_run_meta,
             report_schema_version=chosen.schema_version or REPORT_SCHEMA_VERSION,
             show_clean_documents=settings.report_show_clean_documents,
         )
-        return render_template(chosen, context)
+        return render_template(chosen, context, extensions=loaded)
     except TemplateError as exc:
         raise ValueError(str(exc)) from exc

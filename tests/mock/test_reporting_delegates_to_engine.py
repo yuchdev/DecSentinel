@@ -50,9 +50,10 @@ def test_render_returns_the_engine_output_verbatim(monkeypatch: pytest.MonkeyPat
         calls["build"] = (result, config, options)
         return sentinel_context
 
-    def engine(template: Any, context: Any) -> str:
+    def engine(template: Any, context: Any, **options: Any) -> str:
         """Record the engine arguments and return a sentinel report."""
         calls["engine"] = (template, context)
+        calls["engine_options"] = options
         return "<<engine output>>"
 
     monkeypatch.setattr(reporting.ReportModel, "build", staticmethod(build))
@@ -70,6 +71,9 @@ def test_render_returns_the_engine_output_verbatim(monkeypatch: pytest.MonkeyPat
     assert options["strict"] is True
     assert options["show_clean_documents"] is True
     assert options["report_include_run_meta"] is True
+    # One registry feeds both the model hooks and the engine's filter table (M9, M30).
+    assert calls["engine_options"]["extensions"] is options["extensions"]
+    assert not options["extensions"]
 
 
 def test_render_passes_a_loaded_template_through(monkeypatch: pytest.MonkeyPatch):
@@ -90,7 +94,7 @@ def test_render_passes_a_loaded_template_through(monkeypatch: pytest.MonkeyPatch
         - The ``isinstance(template, Template)`` branch of ``reporting._resolve``
     """
     seen: list[Any] = []
-    monkeypatch.setattr(reporting, "render_template", lambda template, context: seen.append(template) or "")
+    monkeypatch.setattr(reporting, "render_template", lambda template, context, **_: seen.append(template) or "")
     loaded = load_template("json-v1")
 
     reporting.render(_RESULT, "text", template=loaded)
@@ -116,7 +120,7 @@ def test_engine_template_error_becomes_value_error(monkeypatch: pytest.MonkeyPat
         - The ``except TemplateError`` clause of ``render``
     """
 
-    def failing(template: Any, context: Any) -> str:
+    def failing(template: Any, context: Any, **_: Any) -> str:
         """Raise like a render past a cap."""
         raise TemplateError("render output exceeds the cap")
 

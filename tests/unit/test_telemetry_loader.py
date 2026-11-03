@@ -328,7 +328,7 @@ def test_error_names_the_json_path_of_the_offending_node():
         ("{findings.0.message.upper}", "unknown variable"),
         ("{profile.0}", "unknown variable"),
         ("{profile|shout}", "unknown filter: shout"),
-        ("{profile|ext.domain.name}", "unknown filter: ext.domain.name"),
+        ("{profile|ext.domain.name}", "needs extension domain listed in requires_extensions"),
         ("{profile|join}", "takes 1 argument"),
         ('{profile|lower("x")}', "takes 0 argument"),
         ('{documents|join(", ")|neutralize}', "cannot take"),
