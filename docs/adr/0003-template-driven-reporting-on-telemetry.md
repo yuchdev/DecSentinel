@@ -54,7 +54,12 @@ should carry, so the report and the event stream should be one model.
 5. **Extensions add data, not rendering.** Python extensions contribute
    namespaced variables and filters; `builtin:domain` is the shipped example
    (domain from path: `docs`, `.claude/agents`, ...). `python:` extensions need an
-   explicit invoker opt-in because a scanned repo's config must not run code.
+   explicit invoker opt-in because a scanned repo's config must not run code: they
+   are accepted only from argv with `--allow-python-extensions` (or the env var set
+   to exactly `1`), never from config, and the gate lives in the one `importlib`
+   helper shared with the Milestone 0006 `python:` sink (plan D5, as amended by
+   [the extensions threat model](/docs/security/threat-model-0007-extensions-2026-11-03.md)).
+   Extension data is always untrusted and extension filters are never sinks.
 6. **JSON moves to report schema 2** (document-centric, one record per document
    with its problems, clean documents included). The v1 shape remains available
    as the packaged template `json-v1.json`, golden-tested byte-for-byte.

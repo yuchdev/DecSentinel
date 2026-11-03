@@ -56,7 +56,7 @@ milestone can proceed, and a wrong guess costs one template line to change.
 | D2 | Text report lists only documents *with* problems. | Yes; `--show-clean-documents` (config `report_show_clean_documents`) lists the rest. JSON always includes every document, since the denominator is what makes a rate. |
 | D3 | The JSON field for the short category: the request's example uses both `"type"` and `"message"`. | `type` = short category (`dangling link`), `message` = full text, `value` = offending token. |
 | D4 | Top-level JSON shape: your example shows a bare list of documents, but a report also needs profile/model/summary. | `json.json` is an envelope (`documents` list inside); the bare list ships as `json-documents.json`. |
-| D5 | `python:` extensions execute code from a module path. | Refuse unless `--allow-python-extensions` / `DOCSENTINEL_ALLOW_PYTHON_EXTENSIONS=1`; `builtin:*` always allowed. |
+| D5 | `python:` extensions execute code from a module path. | Amended by the [extensions threat model](/docs/security/threat-model-0007-extensions-2026-11-03.md) (decision D-A, ratified): a `python:` spec is accepted **only from argv** (`--extension`; for 0006, `--telemetry-sink`) and only with `--allow-python-extensions` or `DOCSENTINEL_ALLOW_PYTHON_EXTENSIONS` exactly `"1"`. A `python:` entry in config is a `ConfigError`. Only `cli.py` reads the env var; the library API takes an explicit keyword. The gate lives inside the single shared `importlib` helper, and a refused spec is exit 2 on the event path too. `builtin:*` is always allowed. No `--allow-repo-python-extensions` (D-B) and no wall-clock budget (D-C, accepted risk). |
 | D6 | `outcome` in your example is `null`. | Compute it with the Milestone 0006 mapping (`rejected` / `advisory` / ...), `null` only when nothing maps. |
 
 ## Coordination with 0006
@@ -123,7 +123,8 @@ path references. 0006 Stories 02.0–04.0 then land into `telemetry/sinks.py` an
       neutralized message.
 - [ ] `builtin:domain` labels a `.claude/agents/x.md` document `agent` and a
       `docs/x.md` document `docs`, in the report and in `FaultEvent.domain`.
-- [ ] A `python:` extension is refused without the explicit opt-in; allowed with it.
+- [ ] A `python:` extension is refused without the explicit opt-in and allowed with it
+      only from argv; a `python:` entry in config is a `ConfigError` (D5).
 - [ ] Two consecutive runs produce byte-identical default reports.
 - [ ] CanonixEngine acceptance: re-running the 9 reports yields the specified
       shapes (recorded in the 05.0 task).

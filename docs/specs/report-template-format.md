@@ -43,7 +43,7 @@ template.json --> loader/validator --> renderer(template, context) --> str
 | `template_version` | Integer; this spec is `1`. Unknown version -> `TemplateError`. |
 | `name` | Kebab-case; must equal the file stem for packaged templates. |
 | `type` | `"text"` or `"json"`. Unknown type -> `TemplateError`. |
-| `requires_extensions` | Extension names that must be loaded (Section 7); missing -> `TemplateError`. |
+| `requires_extensions` | Extension names (`^[a-z][a-z0-9_]{0,63}$`) that must be loaded (Section 9); missing -> `TemplateError`. A template that references `ext.<n>...` or a filter `ext.<n>.<f>` must list `<n>` here, otherwise it is a load-time `TemplateError`. Listing a name never loads anything. |
 | unknown keys | Rejected (fail closed), so a typo never silently drops content. |
 
 ## 3. Variable syntax
@@ -234,8 +234,21 @@ The loader validates every reference against this schema. Each variable carries 
 
 ### Document
 
-`path` (**untrusted**), `bytes`, `problem_count`, `severity_counts`, `problems`
-(list), plus extension keys under `ext.<name>.*` (e.g. `doc.ext.domain.name`).
+`path` (**untrusted**), `bytes`, `domain` (str, **untrusted**; always present, set by
+the core provider from `domain_for(path, config)`, `"docs"` unless `builtin:domain` is
+loaded; never filled from an extension hook), `problem_count`, `severity_counts`,
+`problems` (list), plus extension keys under `ext.<name>.*` (e.g.
+`doc.ext.domain.name`).
+
+### Extension data (`ext`)
+
+`ext` exists at run, document (`doc.ext`) and problem (`p.ext`) level. It resolves as
+an `object` whose members are only the names in the template's `requires_extensions`.
+Every deeper segment (`ext.<name>.*`) has the value kind **`any`**, which is always
+**untrusted**; trust is inherited by every descendant and list element. No extension
+and no template can mark an `ext.*` value trusted. An `any` value is accepted where a
+scalar is expected only with a render-time check (a container is a `TemplateError`),
+and `$for`/`over` on a non-list `any` is a `TemplateError`.
 
 ### Problem
 
@@ -256,17 +269,21 @@ The loader validates every reference against this schema. Each variable carries 
 | `gha_data` | `neutralize` (CR/LF kept) then percent-encode `% \r \n`. | github |
 | `json` | `json.dumps` (ASCII-safe). | any |
 | `join(sep)`, `len`, `lower`, `upper`, `default(x)` | Plain transforms; never a sink. | -- |
-| `ext.<ext>.<name>` | Filter registered by an extension. | per declaration |
+| `ext.<ext>.<name>` | Filter registered by an extension; returns a JSON scalar. | **never** |
 
 Filters are pure functions `str -> str` (or the stated type) registered in a
-closed table; a template cannot define one. An extension may add namespaced
-filters and must declare whether each is a *sink* filter.
+closed table; a template cannot define one. An extension may add filters named
+exactly `ext.<own name>.<filter>` (`<filter>` matching `[a-z_][a-z0-9_]{0,63}`), with
+a declared arity (0 or 1 quoted literal) and declared input kinds. They live in a
+per-render registry, never in the core table. An extension filter is **never a
+sink** and cannot declare itself one, and the output of any chain that contains an
+extension filter is **untrusted**, whatever the trust of its input (Section 8).
 
 ## 8. Trust rule (fail closed)
 
 A `text`-type template that references an **untrusted** variable must route it
-through a *sink* filter (`neutralize`, `gha_property`, `gha_data`, `json`, or an
-extension filter declared as a sink) **before it is emitted**. Otherwise the
+through a core *sink* filter (`neutralize`, `gha_property`, `gha_data`, `json`;
+extension filters are never sinks) **before it is emitted**. Otherwise the
 loader raises `TemplateError` -- an author cannot forget escaping, and a custom
 template cannot reintroduce the log-forging / Trojan-Source holes the current
 renderer closes. `json` templates are exempt: serialization is the sink.
@@ -277,6 +294,12 @@ The rule is checked strictly (threat model T1/T2):
   own is untrusted when any member is untrusted.
 - Dicts, and lists not reduced by `join`/`len`/`json`, cannot be emitted in text.
 - The chain must **end** with the sink, so `{p.message|neutralize|upper}` is rejected.
+- A chain that contains an `ext.*` filter is treated as **untrusted** whatever its input,
+  so it too must end with a core sink and, under `"sink": "github"`, obey every rule for
+  untrusted variables below. So `{p.message|ext.x.f}` is rejected in text, and
+  `{profile|ext.x.f}` is rejected on a plain github line but accepted as
+  `::error ...::{profile|ext.x.f|gha_data}`.
+- Every `ext.*` variable is untrusted (Section 6), at every depth.
 - With `"sink": "github"` in `output`, only `gha_property`/`gha_data` count as sinks. Any
   variable (trusted or not) before the second `::` of a command line needs
   `gha_property`, and so does every variable of an `append` loop. An untrusted variable
@@ -309,42 +332,84 @@ The rule is checked strictly (threat model T1/T2):
 Extensions are Python callables that add data to the context. They never touch
 the renderer.
 
+The normative security contract is
+[threat-model-0007-extensions-2026-11-03.md](/docs/security/threat-model-0007-extensions-2026-11-03.md)
+(M1-M34); the task specs of
+[Story 04.0](/docs/roadmap/0007-telemetry-driven-reporting/04.0-extensions/README.md)
+carry the details.
+
+- Extension names match `^[a-z][a-z0-9_]{0,63}$`. Builtin names (`domain`,
+  `document_stats`, ...) are reserved: a `python:` extension using one, two
+  extensions with one name, or one spec given twice is an `ExtensionError`.
 - Variables are namespaced: an extension named `domain` can only write under
-  `ext.domain.*`, `doc.ext.domain.*`, `p.ext.domain.*`. It cannot overwrite a core
-  variable.
+  `ext.domain.*`, `doc.ext.domain.*`, `p.ext.domain.*`. It cannot add, replace or
+  remove a core variable at any level, and all of its data is untrusted (Section 6).
 - Three hooks, all optional: `provide_run(model) -> Mapping`,
   `provide_document(doc, model) -> Mapping`, `provide_problem(problem, doc, model) -> Mapping`.
-  Returned trees must be JSON-shaped; anything else is an `ExtensionError`.
-- Selected by `telemetry_extensions = ["builtin:domain", "python:<module>:<callable>"]`.
-  `builtin:*` names resolve inside the package; `python:` runs arbitrary code and
-  is **refused** unless the invoker passes `--allow-python-extensions` or sets
-  `DOCSENTINEL_ALLOW_PYTHON_EXTENSIONS=1` -- a scanned repository's own
-  `docsentinel.toml` must not be able to execute code in CI by itself.
+  Hooks receive deep-frozen copies. Returned trees must be JSON-shaped and within the
+  depth/size bounds, and are copied into fresh builtin objects; anything else is an
+  `ExtensionError`.
+- Selection. `--extension SPEC` (repeatable) takes a spec, `builtin:<name>` or
+  `python:<module>:<callable>`. `telemetry_extensions = ["builtin:domain"]` in config
+  may hold **only** `builtin:` specs; a `python:` (or any other) entry in config is a
+  `ConfigError` (exit 2) whatever the gate says. `builtin:*` names resolve through a
+  static table inside the package and never need the gate.
+- Trust gate. A `python:` spec runs arbitrary code. It is accepted **only from argv**
+  and only when the invoker also passes `--allow-python-extensions` or sets
+  `DOCSENTINEL_ALLOW_PYTHON_EXTENSIONS` to exactly `"1"` (any other value is refused).
+  Only the CLI reads that variable; the library API takes an explicit
+  `allow_python_extensions=False` keyword and never reads the environment. The gate
+  is enforced inside the single `importlib` helper shared with the Milestone 0006
+  `python:` sink, before any import, and a module whose origin lies inside the scan
+  root or the cwd is refused. So a scanned repository's own `docsentinel.toml`, or a
+  module it adds, can never choose code to execute.
 - A failing extension during a **report** is a fail-closed `ExtensionError`
-  (CLI exit 2, neutralized message). During fault-**event emission** (Milestone
-  0006) the same failure is swallowed, because telemetry must never fail a scan.
+  (CLI exit 2, neutralized message, nothing written to stdout). During
+  fault-**event emission** (Milestone 0006) a hook failure is swallowed with one
+  bounded stderr warning per extension, because telemetry must never fail a scan.
+  A refused `python:` spec or a config error is **never** swallowed: it is exit 2 on
+  both paths.
+- `requires_extensions` is checked against the loaded, validated names after the
+  gate and before the scan; it never loads an extension, and its error message
+  never suggests the gate or a module path.
 
 The shipped example, `builtin:domain`, assigns `domain` from the document path
-using ordered glob rules (first match wins):
+using an ordered array of glob rules (first match wins; `"docs"` when nothing
+matches):
 
 ```toml
-[tool.doc_sentinel.telemetry_domains]
-".claude/agents/**" = "agent"
-".claude/skills/**" = "agent"
-"docs/**"           = "docs"
-"adr/**"            = "docs"
-"*"                 = "docs"
+[[tool.doc_sentinel.telemetry_domains]]
+glob = ".claude/agents/**"
+domain = "agent"
+
+[[tool.doc_sentinel.telemetry_domains]]
+glob = ".claude/skills/**"
+domain = "agent"
+
+[[tool.doc_sentinel.telemetry_domains]]
+glob = "docs/**"
+domain = "docs"
+
+[[tool.doc_sentinel.telemetry_domains]]
+glob = "**"
+domain = "docs"
 ```
 
-The same value feeds `FaultEvent.domain` (Milestone 0006) so the report and the
-event stream can never disagree.
+Globs are split on `/`: `**` (a whole segment) matches zero or more segments, `*`
+and `?` never cross `/`, everything else is literal; the catch-all is `"**"`.
+Domain values match `^[a-z][a-z0-9_-]{0,63}$`. Matching uses a non-regex matcher.
+
+The same `domain_for(path, config)` fills the core `doc.domain` and
+`FaultEvent.domain` (Milestone 0006), so the report and the event stream can never
+disagree. `json.json` emits `{"$var": "doc.domain", "$default": "docs"}`.
 
 ## 10. Errors
 
 | Error | When | CLI |
 |---|---|---|
 | `TemplateError` | unreadable/oversized/unparseable/invalid template, unknown variable/filter/operator, `variables_used` mismatch, untrusted variable without a sink filter, missing required extension | exit 2 |
-| `ExtensionError` | extension import/hook failure, non-JSON-shaped return, namespace violation, python extension not allowed | exit 2 |
+| `ExtensionError` | extension import/hook failure, non-JSON-shaped or oversized return, namespace or reserved-name violation, `python:` extension refused by the gate or the origin check (exit 2 on the event path too) | exit 2 |
+| `ConfigError` | a non-`builtin:` entry in `telemetry_extensions`; an invalid or out-of-bounds `telemetry_domains` entry | exit 2 |
 
 Messages echo bounded, `neutralize`d text. Templates named in config must be
 root-contained regular files of bounded size (same containment gate as DS115's
