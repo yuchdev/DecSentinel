@@ -206,6 +206,30 @@ def _report_extensions(
     )
 
 
+#: Characters of the root argument echoed in a resolution error.
+_MAX_ROOT_ECHO = 200
+
+
+def _resolve_root(spelled: str) -> Path:
+    """Return the canonical scan root, turning a symlink loop into a ``ConfigError``.
+
+    ``Path.resolve`` raises ``RuntimeError`` on a symlink loop (Python 3.12), which
+    would otherwise escape as a traceback and exit 1. The root argument is invoker
+    input; it is bounded here and neutralized when the error is printed.
+
+    :param spelled: The root argument as the invoker typed it.
+    :returns: The resolved path.
+    :raises ConfigError: When the path cannot be resolved (a symlink loop, or an
+        ``OSError`` while resolving).
+    """
+    try:
+        return Path(spelled).resolve()
+    except (RuntimeError, OSError) as exc:
+        shown = spelled[:_MAX_ROOT_ECHO] + ("..." if len(spelled) > _MAX_ROOT_ECHO else "")
+        reason = "symlink loop" if isinstance(exc, RuntimeError) else type(exc).__name__
+        raise ConfigError(f"cannot resolve the scan root {shown!r}: {reason}") from None
+
+
 def _origin_spellings(spelled: str, *, is_file: bool) -> tuple[Path, ...]:
     """Return the scan-root spellings the M6 boundary anchors besides the resolved root.
 
@@ -460,7 +484,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 0
     if args.command == "baseline":
         try:
-            target = Path(args.root).resolve()
+            target = _resolve_root(args.root)
             directory = target.parent if target.is_file() else target
             settings = load_config(directory, args.config)
             if args.profile is not None:
@@ -483,7 +507,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(f"Saved baseline: {output_path}")
         return 0
     try:
-        target = Path(args.root).resolve()
+        target = _resolve_root(args.root)
         directory = target.parent if target.is_file() else target
         # M6 (F1, N5, L1): the unresolved and the logical ($PWD) spellings keep the
         # checkout in the extension boundary when the root, a root file or the cwd is
