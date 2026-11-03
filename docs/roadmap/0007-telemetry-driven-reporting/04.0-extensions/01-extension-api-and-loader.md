@@ -95,7 +95,9 @@ must be callable; a missing hook is a no-op (M13).
   `python:` sink, proposed as:
 
   ```python
-  def load_python_target(spec: str, *, allow_python: bool, root: Path, cwd: Path) -> object
+  def load_python_target(
+      spec: str, *, allow_python: bool, root: Path, cwd: Path, origin_roots: Sequence[Path] = ()
+  ) -> object
   ```
 
   `allow_python` is required with no default. The gate check runs first, before any
@@ -149,6 +151,20 @@ must be callable; a missing hook is a no-op (M13).
     The `sys.modules` check is best-effort detection of accidental imports,
     defeated by a planted module that rewrites its own location, and runs
     unconditionally on the event path.
+  - *Amendment 2026-11-03 (third security re-verification of Task 01, F1, F2).*
+    **F1:** the boundary anchors every spelling of the scan root the invoker
+    supplied. `resolve_extensions` and `load_python_target` take `origin_roots`
+    (absolute, unresolved paths; each an anchor whose marked ancestors are project
+    roots too). The CLI passes `os.path.abspath(<root argument>)` (its parent for a
+    file) next to the resolved directory, so a `<checkout>/docs` (or root file) that
+    is a symlink out of the checkout cannot drop the checkout; templates and config
+    keep the resolved directory. **F2:** extension filters are in the prevention
+    set: the `sys.path`/`sys.modules` check also runs between each factory and its
+    `filters()` hook, and every registered extension filter re-checks `sys.path`
+    before each call through a guard bound to the run's `ModuleWatch`; the guard's
+    `ExtensionError` propagates and is never turned into a filter or render failure.
+    F3 (the `check_path` cache keyed on path strings) and F5 (tripwire spellings) are
+    follow-ups recorded under the threat model's residual risks.
 - **Builtins (M5).** `builtin:<name>` resolves through a static `dict` in
   `telemetry/builtin/__init__.py` (name -> fixed module/class). The user string is
   never interpolated into an `import_module` argument; an unknown name is refused
@@ -179,7 +195,11 @@ be supplied by the invoker, and links the docs. It never suggests
 
 - Each hook call is wrapped. `Exception` and `SystemExit` become `ExtensionError` on
   the report path (exit 2, so `SystemExit(0)` cannot downgrade exit 1) and are
-  swallowed on the event path. `KeyboardInterrupt` propagates.
+  swallowed on the event path. `KeyboardInterrupt` propagates. *Amendment
+  2026-11-03 (F4):* only an exact `KeyboardInterrupt` propagates; an
+  extension-defined subclass is wrapped like any other hook failure, so it cannot
+  skip the wrapping or the final M6 check. The Milestone 0006 adapter must not catch
+  `KeyboardInterrupt` around `EventHookGuard`.
 - `ExtensionError` messages echo only the spec or validated name, the hook name, the
   exception class `__qualname__` and up to 200 characters of `str(exc)`; each part is
   truncated, then `filters.neutralize`d, and the message is capped at 512
@@ -273,7 +293,8 @@ Each case is the test list of the cited mitigation in the threat model.
   surrogate are refused; a small per-problem return over many problems hits a
   lowered aggregate cap with bounded peak memory (M15, M16).
 - Unit: `SystemExit(0)` with blocking findings gives exit 2; `RecursionError` gives
-  exit 2 with a bounded message; `KeyboardInterrupt` propagates (M17).
+  exit 2 with a bounded message; an exact `KeyboardInterrupt` propagates and a
+  subclass is wrapped (M17, F4).
 - Unit: a python extension named `domain` is refused; a duplicate name or spec is
   refused; a hook returning `{"path": "forged"}` leaves `doc.path` unchanged (M25,
   M26).

@@ -193,6 +193,29 @@ mitigations with an owning task.
         `__spec__.origin` defeats it (R3).
       - **N3.** The event path runs the `sys.modules` check after every event's
         hooks, unconditionally (a size-only shortcut missed a replaced entry).
+    - *Amendment 2026-11-03 (third security re-verification of Task 01, findings
+      F1, F2, F4):*
+      - **F1.** The boundary anchors every spelling of the scan root the invoker
+        supplied, not only the resolved one. The CLI resolved its argument before
+        handing it over, so when `<checkout>/docs` (or a root file) was a symlink
+        pointing out of the checkout, the boundary became the link target and its
+        ancestors and the checkout dropped out; a planted `<checkout>/src` module on
+        `PYTHONPATH` then ran (auditor fixture w14; a file root ran the code too, as
+        extensions resolve before the scan). `resolve_extensions` and
+        `load_python_target` take `origin_roots` (absolute, never resolved); each is
+        an anchor and its marked ancestors are project roots. The CLI passes
+        `os.path.abspath(<root argument>)`, its parent for a file. Templates and
+        config keep the resolved directory. The library `reporting.render(root=...)`
+        was not affected: it already walks both spellings of the `root` it is given.
+      - **F2.** Extension filters are part of the prevention set. The `sys.path`
+        check (and the `sys.modules` check) also runs between each factory and its
+        `filters()` hook, and every registered extension filter re-checks `sys.path`
+        before each call (a guard bound to the run's `ModuleWatch`). The guard's
+        `ExtensionError` propagates unchanged: it is never turned into a filter
+        failure or a render `TemplateError`. Previously a filter could put the
+        checkout on `sys.path` on one call and import through it on the next; only
+        the post-render `sys.modules` check caught it, after the planted module ran.
+      - **F4.** See M17: only an exact `KeyboardInterrupt` propagates.
   - Document: run the console script (not `python -m`), or `python -P`
     (`PYTHONSAFEPATH`); do not set `PYTHONPATH` to the checkout in untrusted-PR jobs.
   - `builtin:<name>` resolves through a **static** `dict` in
@@ -376,6 +399,16 @@ mitigations with an owning task.
   - **M17.** Wrap each hook call. `Exception` and `SystemExit` become `ExtensionError`
     on the report path and are swallowed on the event path (T10). `KeyboardInterrupt`
     propagates. The extension cannot pick the process exit code.
+    - *Amendment 2026-11-03 (third security re-verification, F4):* only an exact
+      `KeyboardInterrupt` (`type(exc) is KeyboardInterrupt`) propagates. A subclass is
+      extension-defined, so it is wrapped like any other hook failure wherever
+      extension code can run (hooks, factories, `filters()`, extension filters,
+      attribute reads, `str(exc)`/`__qualname__` of a hook's exception, and the
+      `sys.path`/`sys.modules` reads). Previously a hook raising a subclass escaped the
+      wrapping and the final M6 check (CLI exit 1 plus a traceback with paths). The
+      Milestone 0006 adapter that calls `EventHookGuard` must not catch
+      `KeyboardInterrupt` (exact or subclass) itself: a subclass is already a swallowed
+      hook failure inside the guard, and the exact one must reach the process.
   - **M18.** Builtins are O(D + F) per render. `document_stats` computes
     `worst_documents` once, in `provide_run`, with a heap of size 5. The `domain_for`
     result is memoized per path. Pin it with an op-count or time-bounded test on 50k
@@ -389,7 +422,8 @@ mitigations with an owning task.
   - Tests:
     - a hook raising `SystemExit(0)` with blocking findings gives exit 2, not 0;
     - `RecursionError` gives exit 2 with a bounded message;
-    - `KeyboardInterrupt` propagates;
+    - `KeyboardInterrupt` propagates; a `KeyboardInterrupt` subclass raised by a hook,
+      a filter, a `name` property or an exception's `__str__` is wrapped (F4);
     - builtins on 50k synthetic documents stay within the bound.
 
 ### [MEDIUM] T8 `telemetry_domains` glob table: semantics, ReDoS, bounds
@@ -633,6 +667,27 @@ Hand fixes to `python-expert` and the listed tests to `testing-expert`.
   `spec_from_file_location` + `exec_module` without inserting the module;
   `runpy.run_path`; scrubbing or rewriting a module's `__spec__`/`__file__`; and any
   import-and-delete done inside a single hook.
+- **R1/R3 follow-ups (2026-11-03, third security re-verification, F3 and F5; no code
+  change yet, owner: Task 01 follow-up):**
+  - **F3.** `ModuleWatch.check_path` remembers the last accepted state by the process
+    cwd and the `sys.path` *strings*, not by `realpath`/device-inode identity. An
+    extension that retargets a symlink already on `sys.path` (outside the boundary
+    when accepted) into the checkout keeps every string equal, so the cached
+    acceptance skips the re-check and a later import resolves through the link (r9
+    `retarget`/`retarget2`). Follow-up: key the cache on the canonical path and stat
+    identity of each entry (or drop the cache). Until then this is detection only, by
+    the `sys.modules` check, defeated as in R3.
+  - **F5.** The importlib AST tripwire (M3) is a review aid, not a sandbox, and misses
+    simple spellings that reach a by-name import or code execution: a local rebinding
+    of `importlib` (`il = importlib; getattr(il, x)`), `g = getattr`,
+    `functools.partial(getattr, importlib)`, `operator.attrgetter`,
+    `inspect.getattr_static`, `getattr(sys, "modules")[n]`, `m = sys.modules; m[n]`,
+    `warnings._getcategory`, `unittest.mock.patch` (dotted-name import),
+    `typing.get_type_hints` (string annotation evaluation), and
+    `subprocess`/`os.system` running a second interpreter (r9 `tw.py`). Follow-up:
+    extend the tripwire to these names and to aliasing of `getattr`/`importlib`/`sys`,
+    or replace it with an allowlist of modules `src/docsentinel/` may import. It
+    guards DocSentinel's own code; it never constrained an admitted extension (R1).
 - **R2.** A single hook that never returns cannot be stopped in-process. The CI job
   timeout is the backstop.
 - **R3.** M6's origin check is a point-in-time check. A checkout that is modified during
@@ -707,7 +762,8 @@ Task 01:
    read once (M13-M14).
 6. Per-hook and aggregate bounds are enforced incrementally (no `json.dumps` first), and
    rendering charges extension data to the existing budgets (M15-M16).
-7. `SystemExit(0)` cannot downgrade exit 1; `KeyboardInterrupt` propagates (M17).
+7. `SystemExit(0)` cannot downgrade exit 1; an exact `KeyboardInterrupt` propagates
+   and a subclass is wrapped (M17, amended 2026-11-03 F4).
 8. Error messages are bounded, neutralized and free of paths. stdout is empty on
    failure. The event path writes one warning and never swallows refusals (M27-M29).
 9. Load order and the `requires_extensions` message contain no gate hint (M30-M31).
