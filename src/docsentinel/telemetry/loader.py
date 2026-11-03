@@ -204,7 +204,7 @@ _TYPE_ANY = "any"
 
 #: Prefix of an extension filter name, ``ext.<extension>.<filter>`` (spec §7).
 _EXT_FILTER_PREFIX = "ext."
-_EXT_FILTER_LEAF_PATTERN = re.compile(r"[a-z_][a-z0-9_]{0,63}")
+_EXT_FILTER_LEAF_PATTERN = re.compile(r"[a-z][a-z0-9_]{0,63}")
 
 
 def _echo(value: str) -> str:

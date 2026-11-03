@@ -27,7 +27,13 @@ from typing import Optional, Union
 from docsentinel.config import Config
 from docsentinel.models import ScanResult
 from docsentinel.telemetry.engine import render_template
-from docsentinel.telemetry.extensions import LoadedExtensions, check_template, resolve_extensions
+from docsentinel.telemetry.extensions import (
+    PYTHON_PREFIX,
+    ExtensionError,
+    LoadedExtensions,
+    check_template,
+    resolve_extensions,
+)
 from docsentinel.telemetry.filters import TemplateError
 from docsentinel.telemetry.filters import neutralize as _neutralize
 from docsentinel.telemetry.loader import DEFAULT_TEMPLATE, Template, load_named_template, load_template
@@ -47,6 +53,17 @@ def neutralize_text(value: str) -> str:
     :returns: The text with every unsafe code point rendered as a visible escape.
     """
     return _neutralize(value)
+
+
+def _has_python_spec(extensions: object) -> bool:
+    """Return whether an ``extensions=`` sequence holds a ``python:`` spec string.
+
+    :param extensions: The ``extensions`` argument of :func:`render`.
+    :returns: The decision; malformed values are left to ``resolve_extensions``.
+    """
+    if isinstance(extensions, (str, bytes)) or not isinstance(extensions, Sequence):
+        return False
+    return any(isinstance(spec, str) and spec.startswith(PYTHON_PREFIX) for spec in extensions)
 
 
 def _resolve(
@@ -96,7 +113,9 @@ def render(
         ``report_templates_dir``, ``report_show_clean_documents`` and
         ``report_include_run_meta``, and drives the per-problem classification.
     :param template: A template or template file path; wins over ``format``.
-    :param root: The scan root ``report_templates_dir`` is resolved against.
+    :param root: The scan root ``report_templates_dir`` is resolved against, and the
+        anchor of the ``python:`` origin check; required when ``extensions`` holds a
+        ``python:`` spec.
     :param strict: Whether warnings are blocking (``--strict``); feeds ``outcome``.
     :param extensions: Extension specs equivalent to ``--extension`` (``builtin:<name>``
         or ``python:<module>:<callable>``), resolved after ``config.telemetry_extensions``;
@@ -111,7 +130,9 @@ def render(
         neutralized, and the :class:`~docsentinel.telemetry.filters.TemplateError`
         is chained as the cause.
     :raises docsentinel.telemetry.extensions.ExtensionError: If an extension is
-        refused, cannot be loaded, or fails (a ``ValueError``; bounded message).
+        refused (including a ``python:`` spec without ``root``), cannot be loaded, or
+        fails, or a ``python:`` extension imported a module from the checkout during
+        the render (a ``ValueError``; bounded message).
     :raises docsentinel.config.ConfigError: If ``config.telemetry_extensions`` holds a
         non-``builtin:`` entry.
     """
@@ -119,12 +140,15 @@ def render(
     if isinstance(extensions, LoadedExtensions):
         loaded = extensions
     else:
-        anchor = Path(root) if root is not None else Path.cwd()
+        if root is None and allow_python_extensions is True and _has_python_spec(extensions):
+            raise ExtensionError(
+                "a python: extension needs root= (the scan root) so its origin can be checked against the checkout"
+            )
         loaded = resolve_extensions(
             extensions,
             config=settings,
             allow_python=allow_python_extensions,
-            root=anchor,
+            root=Path(root) if root is not None else Path.cwd(),
             cwd=Path.cwd(),
         )
     try:
@@ -139,6 +163,8 @@ def render(
             report_schema_version=chosen.schema_version or REPORT_SCHEMA_VERSION,
             show_clean_documents=settings.report_show_clean_documents,
         )
-        return render_template(chosen, context, extensions=loaded)
+        report = render_template(chosen, context, extensions=loaded)
     except TemplateError as exc:
         raise ValueError(str(exc)) from exc
+    loaded.check_modules()
+    return report

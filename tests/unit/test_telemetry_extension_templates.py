@@ -502,3 +502,117 @@ def test_requires_check_never_loads_anything(monkeypatch: pytest.MonkeyPatch):
     with pytest.raises(TemplateError, match="domain"):
         check_template(template, LoadedExtensions())
     assert calls == []
+
+
+# --------------------------------------------------------------------------- close-review regressions (2026-11-03)
+
+
+def _two() -> LoadedExtensions:
+    """Two extensions, ``calc`` and ``other``, each adding run, document and problem data."""
+    return admit_extensions(
+        [
+            _ext(
+                name,
+                provide_run=lambda model, n=name: {"who": n},
+                provide_document=lambda doc, model, n=name: {"who": n},
+                provide_problem=lambda p, d, m, n=name: {"who": n},
+            )
+            for name in ("calc", "other")
+        ]
+    )
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        _text(_docs(_line("{doc|json}", ["doc"])), requires=()),
+        _text(_line("{documents|json}", ["documents"]), requires=()),
+        _text(_line("{findings|json}", ["findings"]), requires=()),
+        _text(_line("{documents_with_problems|json}", ["documents_with_problems"]), requires=()),
+        {"template_version": 1, "name": "j", "type": "json", "requires_extensions": [], "body": {"$var": "documents"}},
+    ],
+    ids=["doc-json", "documents-json", "findings-json", "with-problems-json", "json-var-documents"],
+)
+def test_whole_object_sinks_emit_no_ext_data_without_requires(raw: dict[str, Any]):
+    """
+    [Unit] extension templates: verifies {doc|json}, {documents|json} and $var documents carry no ext data (M12).
+
+    Scenario:
+        Given two loaded extensions adding data at every level, and a template listing no requires_extensions
+        When it renders a whole document, problem or list object
+        Then the output is byte-identical to the render without any extension loaded.
+
+    Boundaries:
+        - Focus: close-review finding 6 (auditor probe p03 "no requires" cases)
+        - Fixtures/params: one whole-object sink per case
+        - Scope: render_template via extensions.scope_extension_data
+
+    On failure, first check:
+        - ``extensions.scope_extension_data`` and its call in ``engine.render_template``
+    """
+    template = validate_template(raw)
+    plain = render_template(template, ReportModel.build(_RESULT, Config()))
+
+    rendered = _render(template, _two())
+
+    assert rendered == plain
+    assert "who" not in rendered
+
+
+def test_only_required_extension_data_reaches_a_whole_object_sink():
+    """
+    [Unit] extension templates: verifies a template requiring one extension sees only that extension's data (M12).
+
+    Scenario:
+        Given extensions ``calc`` and ``other`` loaded and a json template requiring only ``calc``
+        When it embeds ``{"$var": "documents"}`` and ``{"$var": "findings"}``
+        Then every ``ext`` object holds ``calc`` and never ``other``, and the context itself is unchanged.
+
+    Boundaries:
+        - Focus: finding 6 partial scope (normal case)
+        - Fixtures/params: none
+        - Scope: render_template
+
+    On failure, first check:
+        - ``extensions._scoped``
+    """
+    loaded = _two()
+    template = validate_template(
+        {
+            "template_version": 1,
+            "name": "j",
+            "type": "json",
+            "requires_extensions": ["calc"],
+            "body": {"docs": {"$var": "documents"}, "flat": {"$var": "findings"}},
+        }
+    )
+    context = ReportModel.build(_RESULT, Config(), extensions=loaded)
+
+    rendered = json.loads(render_template(template, context, extensions=loaded))
+
+    holders = [*rendered["docs"], *[p for d in rendered["docs"] for p in d["problems"]], *rendered["flat"]]
+    assert holders and all(set(item["ext"]) <= {"calc"} for item in holders)
+    assert any(item["ext"] == {"calc": {"who": "calc"}} for item in holders)
+    assert set(context["documents"][1]["ext"]) == {"calc", "other"}  # never mutated
+
+
+@pytest.mark.parametrize("leaf", ["__init__", "_x", "_"])
+def test_extension_filter_leaf_must_start_with_a_letter(leaf: str):
+    """
+    [Unit] extension templates: verifies ``ext.<n>.<filter>`` leaves starting with ``_`` are rejected (finding 8).
+
+    Scenario:
+        Given a template using ``ext.calc.<leaf>`` for a leaf such as ``__init__``
+        When validated
+        Then it is rejected.
+
+    Boundaries:
+        - Focus: filter name grammar ``[a-z][a-z0-9_]{0,63}``
+        - Fixtures/params: one leaf per case
+        - Scope: validate_template
+
+    On failure, first check:
+        - ``loader._EXT_FILTER_LEAF_PATTERN``
+    """
+    with pytest.raises(TemplateError):
+        validate_template(_text(_line(f"{{profile|ext.calc.{leaf}|neutralize}}", ["profile"])))

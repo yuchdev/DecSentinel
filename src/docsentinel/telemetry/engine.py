@@ -77,6 +77,10 @@ Security contract (``docs/security/threat-model-0007-template-engine-2026-10-31.
   result -- an exact JSON scalar, checked by
   :class:`~docsentinel.telemetry.extensions.BoundFilter` -- is charged too; any
   failure is a bounded :class:`TemplateError`.
+* **Extension data scope** (M12) -- before rendering, every ``ext`` object of the
+  context is cut to the template's ``requires_extensions`` (and dropped when it
+  lists none) by :func:`~docsentinel.telemetry.extensions.scope_extension_data`, so
+  a whole-object sink such as ``{doc|json}`` never emits another extension's data.
 """
 
 from __future__ import annotations
@@ -94,6 +98,7 @@ from docsentinel.telemetry.extensions import (
     LoadedExtensions,
     check_template,
     missing_extensions_message,
+    scope_extension_data,
 )
 from docsentinel.telemetry.filters import JSON_FILTER, TemplateError, apply_filter, neutralize, to_text
 from docsentinel.telemetry.loader import (
@@ -1097,6 +1102,7 @@ def render_template(
         raise TemplateError("render_template needs a validated Template")
     extension_filters = _check_extensions(template, extensions)
     try:
+        context = scope_extension_data(context, template.requires_extensions)
         _check_context(context)
         renderer = _Renderer(MappingProxyType(context), extension_filters)
         if template.type == TYPE_TEXT:

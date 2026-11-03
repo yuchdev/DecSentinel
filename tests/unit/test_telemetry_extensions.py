@@ -8,7 +8,9 @@ patched into the static table, so no module is ever imported.
 import importlib
 import importlib.util
 import math
+import sys
 import tracemalloc
+import types
 from types import MappingProxyType, SimpleNamespace
 from typing import Any, Optional
 
@@ -1204,3 +1206,295 @@ def test_name_pattern_parity_with_loader_and_config():
     bare = EXTENSION_NAME_PATTERN.strip("^$")
     assert loader._EXTENSION_PATTERN.pattern == bare
     assert config_module._BUILTIN_EXTENSION_SPEC_PATTERN.pattern == "builtin:" + bare
+
+
+# --------------------------------------------------------------------------- close-review regressions (2026-11-03)
+
+
+class _QualnameBombMeta(type):
+    """A metaclass whose ``__qualname__`` read raises ``SystemExit(0)``."""
+
+    def __getattribute__(cls, attribute: str) -> Any:
+        if attribute == "__qualname__":
+            raise SystemExit(0)
+        return type.__getattribute__(cls, attribute)
+
+
+class _QualnameBomb(Exception, metaclass=_QualnameBombMeta):
+    """An exception whose class name cannot be read."""
+
+
+def _raise_bomb(*args: Any) -> Any:
+    raise _QualnameBomb("boom")
+
+
+def test_exception_class_whose_qualname_raises_cannot_choose_the_exit():
+    """
+    [Unit] extensions: verifies a SystemExit from an exception class's __qualname__ stays contained (M17, M27).
+
+    Scenario:
+        Given a run hook, and separately a filter, raising an exception whose metaclass raises SystemExit(0)
+            when ``__qualname__`` is read
+        When the model is built / the filter is applied
+        Then an ExtensionError / TemplateError with the fixed label ``<exception>`` is raised, never SystemExit.
+
+    Boundaries:
+        - Focus: close-review finding 5 (auditor repro c10-metaclass-exit0)
+        - Fixtures/params: none
+        - Scope: ReportModel.build, BoundFilter.__call__
+
+    On failure, first check:
+        - ``extensions._qualname`` and ``_describe``
+    """
+    with pytest.raises(ExtensionError, match="provide_run failed: <exception>: boom"):
+        _build(_ext(provide_run=_raise_bomb))
+    bound = extensions.BoundFilter("ext.calc.f", "calc", _raise_bomb, 0, frozenset({"scalar"}))
+    with pytest.raises(filters.TemplateError, match="<exception>"):
+        bound("x", ())
+
+
+class _BoolBomb:
+    """An object whose truth value raises ``SystemExit(0)``."""
+
+    def __bool__(self) -> bool:
+        raise SystemExit(0)
+
+
+@pytest.mark.parametrize("sink", [_BoolBomb(), False, 0], ids=["bool-raises", "false", "zero"])
+def test_any_sink_attribute_is_refused_by_identity(sink: object):
+    """
+    [Unit] extensions: verifies a filter carrying any ``sink`` attribute is refused without testing its truth (M7).
+
+    Scenario:
+        Given an ExtensionFilter with a ``sink`` attribute forced on: one whose ``__bool__`` raises SystemExit(0),
+            ``False`` and ``0``
+        When the extension is admitted
+        Then an ExtensionError is raised in every case and no SystemExit escapes.
+
+    Boundaries:
+        - Focus: close-review finding 5 (probe p04 "sink __bool__ raises SystemExit")
+        - Fixtures/params: one sink value per case
+        - Scope: admit_extensions
+
+    On failure, first check:
+        - the ``is not None`` sink check in ``extensions._admit_filters``
+    """
+    flagged = _filter()
+    object.__setattr__(flagged, "sink", sink)
+
+    with pytest.raises(ExtensionError, match="never sinks"):
+        admit_extensions([_ext(filters=lambda: {"ext.calc.f": flagged})])
+
+
+class _ExitingMapping(dict):
+    """A mapping whose ``items`` raises ``SystemExit(0)``."""
+
+    def items(self) -> Any:
+        raise SystemExit(0)
+
+
+@pytest.mark.parametrize(
+    "returned",
+    [MappingProxyType(_ExitingMapping()), MappingProxyType({}), _ExitingMapping()],
+    ids=["proxy-over-custom", "plain-proxy", "dict-subclass"],
+)
+def test_filters_hook_must_return_an_exact_dict(returned: object):
+    """
+    [Unit] extensions: verifies ``filters()`` must return an exact dict, so no mapping method runs (M9).
+
+    Scenario:
+        Given a filters() hook returning a MappingProxyType over a custom mapping whose items() raises
+            SystemExit(0), a plain proxy, or a dict subclass
+        When the extension is admitted
+        Then an ExtensionError says filters() must return a dict.
+
+    Boundaries:
+        - Focus: close-review finding 5 (probe p04 "filters() MappingProxyType(custom...)")
+        - Fixtures/params: one return per case
+        - Scope: admit_extensions
+
+    On failure, first check:
+        - the exact-``dict`` check in ``extensions._admit_filters``
+    """
+    with pytest.raises(ExtensionError, match=r"filters\(\) must return a dict"):
+        admit_extensions([_ext(filters=lambda: returned)])
+
+
+class _HostileKind:
+    """A frozenset member that hashes like ``scalar`` and raises ``SystemExit(0)`` on comparison."""
+
+    def __hash__(self) -> int:
+        return hash("scalar")
+
+    def __eq__(self, other: object) -> bool:
+        raise SystemExit(0)
+
+
+def test_input_kinds_with_a_non_str_member_is_refused_without_comparing_it():
+    """
+    [Unit] extensions: verifies input_kinds members must be exact str before any set comparison (M9).
+
+    Scenario:
+        Given ``input_kinds = frozenset({<object hashing like "scalar" whose __eq__ raises SystemExit(0)>})``
+        When the extension is admitted
+        Then an ExtensionError names input_kinds and no SystemExit escapes.
+
+    Boundaries:
+        - Focus: close-review finding 5 (same class: attribute evaluated by user code)
+        - Fixtures/params: none
+        - Scope: admit_extensions
+
+    On failure, first check:
+        - the exact-``str`` member check in ``extensions._admit_filters``
+    """
+    hostile = _filter(input_kinds=frozenset({_HostileKind()}))
+
+    with pytest.raises(ExtensionError, match="input_kinds"):
+        admit_extensions([_ext(filters=lambda: {"ext.calc.f": hostile})])
+
+
+@pytest.mark.parametrize("leaf", ["__init__", "_x", "_"])
+def test_filter_leaf_starting_with_an_underscore_is_refused(leaf: str):
+    """
+    [Unit] extensions: verifies a filter name such as ``ext.calc.__init__`` is refused (finding 8).
+
+    Scenario:
+        Given a filter registered as ``ext.calc.<leaf>`` with a leading underscore
+        When the extension is admitted
+        Then an ExtensionError names the required form.
+
+    Boundaries:
+        - Focus: filter name grammar ``[a-z][a-z0-9_]{0,63}``
+        - Fixtures/params: one leaf per case
+        - Scope: admit_extensions
+
+    On failure, first check:
+        - ``extensions._FILTER_LEAF_RE``
+    """
+    with pytest.raises(ExtensionError, match="must be ext.calc.<filter>"):
+        admit_extensions([_ext(filters=lambda: {f"ext.calc.{leaf}": _filter()})])
+
+
+def test_invalid_data_message_reads_once():
+    """
+    [Unit] extensions: verifies the invalid-return message no longer repeats "a value that" (finding 8).
+
+    Scenario:
+        Given a run hook returning ``{"a": b"x"}``
+        When the model is built
+        Then the ExtensionError reads "returned invalid data: a value that is not exact JSON data" once.
+
+    Boundaries:
+        - Focus: regression of the duplicated phrase
+        - Fixtures/params: none
+        - Scope: ReportModel.build
+
+    On failure, first check:
+        - ``extensions._run_hook`` and the ``_Shape`` messages
+    """
+    with pytest.raises(ExtensionError) as caught:
+        _build(_ext(provide_run=lambda model: {"a": b"x"}))
+
+    assert "provide_run returned invalid data: a value that is not exact JSON data" in str(caught.value)
+    assert "a value that a value that" not in str(caught.value)
+
+
+class _RefusingWatch:
+    """A stand-in ModuleWatch that reports a change and refuses it."""
+
+    def changed(self) -> bool:
+        return True
+
+    def check(self):
+        raise ExtensionError("python extension refused: module planted was imported during the run")
+
+
+def test_event_guard_never_swallows_a_module_origin_refusal():
+    """
+    [Unit] extensions: verifies EventHookGuard propagates a ModuleWatch refusal instead of warning (M4, M6).
+
+    Scenario:
+        Given a registry whose module watch refuses, with a healthy problem hook
+        When the event guard runs the hooks for one problem
+        Then the ExtensionError propagates and no warning is written.
+
+    Boundaries:
+        - Focus: finding 1 on the fault-event path (refusals are never swallowed)
+        - Fixtures/params: a stub watch
+        - Scope: EventHookGuard.problem_ext
+
+    On failure, first check:
+        - the watch check at the end of ``EventHookGuard.problem_ext``
+    """
+    admitted = admit_extensions([_ext(provide_problem=lambda p, d, m: {"ok": True})])
+    loaded = LoadedExtensions(admitted.extensions, admitted.filters, _RefusingWatch())  # type: ignore[arg-type]
+    warnings: list[str] = []
+
+    with pytest.raises(ExtensionError, match="imported during the run"):
+        EventHookGuard(loaded, warn=warnings.append).problem_ext({"rule": "DS101"}, {"path": "a.md"}, {})
+    assert warnings == []
+
+
+class _ExitingPath:
+    """A ``__path__`` value whose iteration raises ``SystemExit(0)``."""
+
+    def __iter__(self) -> Any:
+        raise SystemExit(0)
+
+
+def test_search_path_that_raises_system_exit_is_a_refusal(tmp_path, monkeypatch: pytest.MonkeyPatch):
+    """
+    [Unit] extensions: verifies a sys.modules package whose __path__ raises SystemExit is refused, not escaped (M6).
+
+    Scenario:
+        Given a pre-imported package whose ``__path__`` iteration raises SystemExit(0)
+        When it is loaded with the gate open
+        Then an ExtensionError says the search path cannot be listed.
+
+    Boundaries:
+        - Focus: hardening in the same class as close-review finding 5
+        - Fixtures/params: none
+        - Scope: load_python_target
+
+    On failure, first check:
+        - ``extensions._locations``
+    """
+    module = types.ModuleType("ds_exiting_pkg")
+    module.__path__ = _ExitingPath()  # type: ignore[assignment]
+    monkeypatch.setitem(sys.modules, "ds_exiting_pkg", module)
+
+    with pytest.raises(ExtensionError, match="cannot be listed"):
+        load_python_target("python:ds_exiting_pkg:make", allow_python=True, root=tmp_path, cwd=tmp_path)
+
+
+class _Impostor:
+    """A sys.modules entry whose ``__class__`` read raises ``SystemExit(0)``."""
+
+    @property
+    def __class__(self) -> Any:  # type: ignore[override]
+        raise SystemExit(0)
+
+
+def test_module_watch_refuses_an_entry_it_cannot_inspect(tmp_path, monkeypatch: pytest.MonkeyPatch):
+    """
+    [Unit] extensions: verifies ModuleWatch fails closed on a new sys.modules entry that raises when inspected (M6).
+
+    Scenario:
+        Given a watch started over an empty directory, then a new sys.modules entry whose ``__class__`` raises
+            SystemExit(0)
+        When the watch checks sys.modules
+        Then an ExtensionError naming the entry is raised and no SystemExit escapes.
+
+    Boundaries:
+        - Focus: close-review finding 1 checker robustness
+        - Fixtures/params: none
+        - Scope: ModuleWatch.check
+
+    On failure, first check:
+        - the guarded inspection in ``extensions.ModuleWatch.check``
+    """
+    watch = extensions.ModuleWatch.start(tmp_path, tmp_path)
+    monkeypatch.setitem(sys.modules, "ds_impostor", _Impostor())
+
+    with pytest.raises(ExtensionError, match="module ds_impostor was imported during the run"):
+        watch.check()

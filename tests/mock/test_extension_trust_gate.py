@@ -330,6 +330,33 @@ def test_render_with_a_config_python_entry_is_a_config_error(imports: list[str],
     assert _ours(imports) == []
 
 
+def test_render_python_spec_without_root_is_refused_before_any_import(
+    imports: list[str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """
+    [Mock] extension gate: verifies render() with the gate open but no root refuses a python: spec (M6).
+
+    Scenario:
+        Given ``render(..., extensions=("python:<module>:make",), allow_python_extensions=True)`` without ``root``
+        When it runs from a cwd that is not the scan root
+        Then an ExtensionError asks for root= and nothing is located or imported; without a python: spec it renders.
+
+    Boundaries:
+        - Focus: close-review finding 3 (auditor probe p07: root=None checked only the cwd)
+        - Fixtures/params: recorded import machinery
+        - Scope: reporting.render
+
+    On failure, first check:
+        - ``reporting._has_python_spec`` and the root check in ``reporting.render``
+    """
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(ExtensionError, match="needs root="):
+        render(_EMPTY, extensions=(f"python:{GOOD}:make",), allow_python_extensions=True)
+    assert _ours(imports) == []
+    assert render(_EMPTY, extensions=(), allow_python_extensions=True)  # no python: spec, no root needed
+
+
 # --------------------------------------------------------------------------- M32 side surfaces
 
 

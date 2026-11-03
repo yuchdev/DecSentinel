@@ -19,7 +19,7 @@ import pytest
 
 from docsentinel import cli
 from docsentinel.telemetry import builtin
-from tests.asset_helpers import AssetCase
+from tests.asset_helpers import AssetCase, load_asset_case
 
 ESC = chr(0x1B)
 
@@ -234,4 +234,109 @@ def test_python_extension_named_like_a_builtin_is_refused_on_the_cli(
 
     assert code == 2 and captured.out == ""
     assert "reserved" in captured.err
+    assert scans == []
+
+
+# --------------------------------------------------------------------------- close-review regressions (2026-11-03)
+
+_EXITER = """
+class _Meta(type):
+    def __getattribute__(cls, attribute):
+        if attribute == "__qualname__":
+            raise SystemExit(0)
+        return type.__getattribute__(cls, attribute)
+
+class _Evil(Exception, metaclass=_Meta):
+    pass
+
+class _Exiter:
+    name = "exiter"
+    def provide_run(self, model):
+        raise _Evil("x")
+
+def make():
+    return _Exiter()
+"""
+
+
+def test_hook_exception_whose_qualname_raises_system_exit_is_exit_two(
+    asset_case: Callable[[str, str], AssetCase],
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    """
+    [Integration] report extensions cli ds101: verifies a SystemExit(0) from an exception's class name cannot pass.
+
+    Scenario:
+        Given a scan with a blocking DS101 finding and an outside python: extension whose run hook raises an
+            exception whose metaclass raises SystemExit(0) when ``__qualname__`` is read
+        When ``docsentinel scan --extension python:<mod>:make --allow-python-extensions`` runs
+        Then it exits 2 with nothing on stdout, never 0.
+
+    Boundaries:
+        - Focus: close-review finding 5 (auditor repro c10-metaclass-exit0: exit 0 with a blocking finding)
+        - Fixtures/params: module on sys.path outside root and cwd
+        - Scope: in-process CLI call
+
+    On failure, first check:
+        - ``extensions._qualname``
+    """
+    root = asset_case("ds101", "dangling_file_link").root
+    modules = tmp_path_factory.mktemp("site")
+    name = "ds_cli_qualname_exiter"
+    (modules / f"{name}.py").write_text(_EXITER, encoding="utf-8")
+    monkeypatch.syspath_prepend(str(modules))
+    monkeypatch.chdir(tmp_path_factory.mktemp("cwd"))
+    monkeypatch.delitem(sys.modules, name, raising=False)
+
+    code = cli.main(["scan", str(root), "--extension", f"python:{name}:make", "--allow-python-extensions"])
+    captured = capsys.readouterr()
+
+    assert code == 2 and captured.out == ""
+    assert "provide_run failed: <exception>" in captured.err
+
+
+def test_subdirectory_scan_with_the_checkout_on_pythonpath_is_refused(
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+    scans: list[Any],
+    capsys: pytest.CaptureFixture[str],
+):
+    """
+    [Integration] report extensions cli ds101: verifies scanning <repo>/docs still refuses <repo>/evilmod.py (M6).
+
+    Scenario:
+        Given a git checkout whose ``docs/`` holds the DS101 case and whose top holds ``evilmod.py``, the checkout
+            on sys.path (``PYTHONPATH=<repo>``) and the cwd elsewhere
+        When ``docsentinel scan <repo>/docs --extension python:evilmod:make --allow-python-extensions`` runs
+        Then it exits 2 before the scan, evilmod never ran and nothing is on stdout.
+
+    Boundaries:
+        - Focus: close-review finding 2 (auditor repro: subdirectory scan from elsewhere)
+        - Fixtures/params: ``.git`` marker
+        - Scope: in-process CLI call
+
+    On failure, first check:
+        - ``extensions.project_roots``
+    """
+    checkout = tmp_path_factory.mktemp("checkout")
+    (checkout / ".git").mkdir()
+    docs = load_asset_case("ds101", "dangling_file_link", checkout / "docs").root
+    sentinel = tmp_path_factory.mktemp("sentinel") / "ran"
+    name = "ds_cli_subdir_evilmod"
+    (checkout / f"{name}.py").write_text(
+        f"from pathlib import Path\nPath({str(sentinel)!r}).write_text('ran')\ndef make():\n    return None\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(checkout))
+    monkeypatch.chdir(tmp_path_factory.mktemp("elsewhere"))
+    monkeypatch.delitem(sys.modules, name, raising=False)
+
+    code = cli.main(["scan", str(docs), "--extension", f"python:{name}:make", "--allow-python-extensions"])
+    captured = capsys.readouterr()
+
+    assert code == 2 and captured.out == ""
+    assert "project root" in captured.err
+    assert not sentinel.exists()
     assert scans == []
