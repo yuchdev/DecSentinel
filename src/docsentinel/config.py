@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+from docsentinel.telemetry.filters import neutralize
+
 _CONFIG_OPTIONS = {
     "include",
     "exclude",
@@ -86,6 +88,8 @@ _CONFIG_OPTIONS = {
     "report_include_run_meta",
     # Milestone 0007 Story 04.0 — report extensions (builtin-only in config).
     "telemetry_extensions",
+    # Milestone 0007 Story 04.0 Task 02 — path -> domain table of ``builtin:domain``.
+    "telemetry_domains",
 }
 # Standalone config file names accepted at the scan root: the preferred name first, then the alias.
 STANDALONE_CONFIG_NAMES = ("docsentinel.toml", "doc_sentinel.toml")
@@ -98,6 +102,22 @@ _BUILTIN_EXTENSION_SPEC_PATTERN = re.compile(r"builtin:[a-z][a-z0-9_]{0,63}")
 
 #: Most ``telemetry_extensions`` entries accepted.
 MAX_TELEMETRY_EXTENSIONS = 32
+
+#: Bounds of the ``telemetry_domains`` table (threat model 0007-extensions M22).
+MAX_TELEMETRY_DOMAINS = 256
+MAX_DOMAIN_GLOB_CHARS = 256
+MAX_DOMAIN_GLOB_SEGMENTS = 32
+
+#: A domain label (owner decision D-D, the Milestone 0006 vocabulary). ASCII only:
+#: ``[a-z]`` in a ``str`` pattern never matches a non-ASCII letter.
+DOMAIN_LABEL_PATTERN = re.compile(r"[a-z][a-z0-9_-]{0,63}")
+
+#: Characters a ``telemetry_domains`` glob may never hold (M20): no character
+#: classes, no alternation, no escapes.
+_DOMAIN_GLOB_REFUSED = frozenset("[]{}\\")
+
+#: The two keys of one ``[[telemetry_domains]]`` table.
+_DOMAIN_ENTRY_KEYS = frozenset({"glob", "domain"})
 
 # A ``document_id_field`` (the frontmatter key DS114 reads) must be a simple,
 # identifier-like key name, bounded in length so a pathological config value can
@@ -275,6 +295,11 @@ class Config:
         (threat model 0007-extensions M1): a ``python:`` spec is accepted only from
         the command line, never from configuration. The extension resolver
         re-checks an injected ``Config`` with :func:`validate_telemetry_extensions`.
+    :ivar telemetry_domains: The ``builtin:domain`` table, ``(glob, domain)`` pairs
+        in configured array order (first match wins; threat model 0007-extensions
+        M20-M23). Validated by :func:`validate_telemetry_domains` here and again by
+        :func:`docsentinel.telemetry.builtin.domain.domain_for` for an injected
+        ``Config``. Ignored unless ``builtin:domain`` is loaded.
     """
 
     include: tuple[str, ...] = ("*.md", "**/*.md")
@@ -340,6 +365,95 @@ class Config:
     report_show_clean_documents: bool = False
     report_include_run_meta: bool = False
     telemetry_extensions: tuple[str, ...] = ()
+    telemetry_domains: tuple[tuple[str, str], ...] = ()
+
+
+def domain_glob_segments(glob: object, where: str) -> tuple[str, ...]:
+    """Validate one ``telemetry_domains`` glob and return its segments (M20, M22).
+
+    Grammar: the glob is split on ``/``; ``**`` is allowed only as a whole segment;
+    ``*`` and ``?`` are wildcards inside one segment; everything else is a literal.
+    Refused: ``[``, ``]``, ``{``, ``}``, ``\\``, ``!`` at the start of a segment, an
+    empty segment (so a leading, trailing or doubled ``/``), a ``.`` or ``..``
+    segment, ``**`` inside a longer segment, and any code point the ``neutralize``
+    filter escapes (controls, bidi and zero-width characters, line separators, lone
+    surrogates). The glob is repository-controlled, so it is never echoed.
+
+    :param glob: The configured glob.
+    :param where: The entry position for the message, e.g. ``telemetry_domains[3]``.
+    :returns: The segments, in order.
+    :raises ConfigError: For a non-string, empty, over-long or over-segmented glob, or
+        any refused grammar element.
+    """
+    if type(glob) is not str or not glob:
+        raise ConfigError(f"{where}.glob must be a nonempty string")
+    if len(glob) > MAX_DOMAIN_GLOB_CHARS:
+        raise ConfigError(f"{where}.glob is longer than {MAX_DOMAIN_GLOB_CHARS} characters")
+    if neutralize(glob) != glob:
+        raise ConfigError(f"{where}.glob holds a control, format or separator character")
+    if any(character in _DOMAIN_GLOB_REFUSED for character in glob):
+        raise ConfigError(f"{where}.glob uses [, ], {{, }} or a backslash, which are not supported")
+    segments = tuple(glob.split("/"))
+    if len(segments) > MAX_DOMAIN_GLOB_SEGMENTS:
+        raise ConfigError(f"{where}.glob has more than {MAX_DOMAIN_GLOB_SEGMENTS} segments")
+    for segment in segments:
+        if not segment:
+            raise ConfigError(f"{where}.glob has an empty segment (a leading, trailing or doubled /)")
+        if segment in (".", ".."):
+            raise ConfigError(f"{where}.glob has a . or .. segment")
+        if segment.startswith("!"):
+            raise ConfigError(f"{where}.glob has a segment starting with !, which is not supported")
+        if "**" in segment and segment != "**":
+            raise ConfigError(f"{where}.glob uses ** inside a segment; ** must be a whole segment")
+    return segments
+
+
+def _domain_entry(entry: object, where: str) -> tuple[str, str]:
+    """Return one validated ``(glob, domain)`` pair.
+
+    :param entry: A TOML table (``dict`` with exactly ``glob`` and ``domain``) or, in
+        an injected :class:`Config`, a ``(glob, domain)`` tuple.
+    :param where: The entry position for the message.
+    :returns: The pair.
+    :raises ConfigError: For any other shape, a bad glob or a domain outside
+        :data:`DOMAIN_LABEL_PATTERN`.
+    """
+    if type(entry) is dict:
+        if set(entry) != _DOMAIN_ENTRY_KEYS:
+            raise ConfigError(f"{where} must be a table with exactly the keys glob and domain")
+        glob, domain = entry["glob"], entry["domain"]
+    elif type(entry) is tuple and len(entry) == 2:
+        glob, domain = entry
+    else:
+        raise ConfigError(f"{where} must be a table with exactly the keys glob and domain")
+    domain_glob_segments(glob, where)
+    if type(domain) is not str or DOMAIN_LABEL_PATTERN.fullmatch(domain) is None:
+        raise ConfigError(f"{where}.domain must match ^[a-z][a-z0-9_-]{{0,63}}$")
+    return glob, domain
+
+
+def validate_telemetry_domains(value: object) -> tuple[tuple[str, str], ...]:
+    """Return the validated ``telemetry_domains`` table as ordered pairs (M20, M22, M23).
+
+    The table is an array of tables (``[[telemetry_domains]]``), so a key-sorting
+    TOML formatter cannot reorder it; the array order is kept as a tuple and the
+    first matching entry wins. The size bound is checked before any entry is
+    inspected, so an injected ``Config`` with a huge table fails fast.
+
+    :param value: The configured array (a ``list`` from TOML) or the tuple of an
+        injected :class:`Config`.
+    :returns: ``(glob, domain)`` pairs, in configured order.
+    :raises ConfigError: For a non-array, more than :data:`MAX_TELEMETRY_DOMAINS`
+        entries, or any invalid entry.
+    """
+    if type(value) is not list and type(value) is not tuple:
+        raise ConfigError("telemetry_domains must be an array of tables with glob and domain")
+    if len(value) > MAX_TELEMETRY_DOMAINS:  # type: ignore[arg-type]
+        raise ConfigError(f"telemetry_domains holds more than {MAX_TELEMETRY_DOMAINS} entries")
+    return tuple(
+        _domain_entry(entry, f"telemetry_domains[{position}]")
+        for position, entry in enumerate(value)  # type: ignore[arg-type]
+    )
 
 
 def validate_telemetry_extensions(value: object) -> tuple[str, ...]:
@@ -680,6 +794,9 @@ def _load_extra_options(options: dict[str, object], defaults: Config) -> dict[st
 
     extra["telemetry_extensions"] = validate_telemetry_extensions(
         options.get("telemetry_extensions", list(defaults.telemetry_extensions))
+    )
+    extra["telemetry_domains"] = validate_telemetry_domains(
+        options.get("telemetry_domains", list(defaults.telemetry_domains))
     )
 
     return extra

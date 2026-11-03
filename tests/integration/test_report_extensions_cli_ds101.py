@@ -51,7 +51,7 @@ def _template(directory: Path, requires: list[str]) -> Path:
 def _install(monkeypatch: pytest.MonkeyPatch, **hooks: Any):
     """Register a ``calc`` builtin built from ``hooks``."""
     monkeypatch.setattr(
-        builtin, "BUILTIN_EXTENSIONS", MappingProxyType({"calc": lambda: SimpleNamespace(name="calc", **hooks)})
+        builtin, "BUILTIN_EXTENSIONS", MappingProxyType({"calc": lambda config: SimpleNamespace(name="calc", **hooks)})
     )
 
 

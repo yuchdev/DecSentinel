@@ -1329,7 +1329,8 @@ def resolve_extensions(
     2026-11-03, F2).
 
     :param specs: Invoker-supplied specs (``--extension``).
-    :param config: The effective configuration.
+    :param config: The effective configuration; also the single argument of every
+        builtin factory (``builtin:domain`` reads ``telemetry_domains`` from it).
     :param allow_python: The invoker's explicit gate decision (no default).
     :param root: The scan root, for the M6 origin check.
     :param cwd: The current directory, for the M6 origin check.
@@ -1371,7 +1372,7 @@ def resolve_extensions(
     for item in parsed:
         if item.kind == "builtin":
             factory = builtin.builtin_factory(item.target)
-            instance = _call(item.text, "factory", factory)
+            instance = _call(item.text, "factory", factory, config)
         else:
             target = load_python_target(item.text, allow_python=allow_python, root=root, cwd=cwd, origin_roots=origins)
             instance = _call(item.text, "factory", target)

@@ -21,6 +21,7 @@ never reads the environment, and a ``python:`` spec runs only when the caller pa
 
 import os
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import Optional, Union
 
@@ -111,7 +112,10 @@ def render(
     :param format: Template name, e.g. a packaged name listed by ``docsentinel doctor``.
     :param config: The effective configuration; ``Config()`` when omitted. Supplies
         ``report_templates_dir``, ``report_show_clean_documents`` and
-        ``report_include_run_meta``, and drives the per-problem classification.
+        ``report_include_run_meta``, and drives the per-problem classification. Its
+        ``telemetry_extensions`` is replaced by the loaded builtin specs, so
+        ``doc.domain`` follows ``builtin:domain`` whether it was selected in config,
+        in ``extensions`` or in a resolved registry.
     :param template: A template or template file path; wins over ``format``.
     :param root: The scan root ``report_templates_dir`` is resolved against, and the
         anchor of the ``python:`` origin check; required when ``extensions`` holds a
@@ -155,6 +159,10 @@ def render(
             root=Path(root) if root is not None else Path.cwd(),
             cwd=Path.cwd(),
         )
+    if loaded.builtin_specs != settings.telemetry_extensions:
+        # The effective Config names exactly the loaded builtins (argv specs merged),
+        # so domain_for -- hence doc.domain -- sees builtin:domain only when it runs (M24).
+        settings = replace(settings, telemetry_extensions=loaded.builtin_specs)
     try:
         chosen = _resolve(format, template, settings, root)
         check_template(chosen, loaded)

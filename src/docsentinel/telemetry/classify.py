@@ -14,6 +14,7 @@ from typing import Final, Optional
 from docsentinel.config import Config
 from docsentinel.models import Finding
 from docsentinel.rules import RULES
+from docsentinel.telemetry.builtin.domain import DEFAULT_DOMAIN, domain_for
 
 #: Rule code -> fault class, mirroring every row of ``fault_classes.md``.
 FAULT_CLASSES: Final[dict[str, str]] = {
@@ -73,9 +74,6 @@ RULE_TITLES: Final[dict[str, str]] = {
 #: Fallback class for a rule with no ``fault_classes.md`` row (a review failure).
 UNMAPPED_FAULT_CLASS: Final[str] = "unmapped"
 
-#: Default content domain until an extension (``builtin:domain``) assigns one.
-DEFAULT_DOMAIN: Final[str] = "docs"
-
 
 @dataclass(frozen=True)
 class Classification:
@@ -85,7 +83,10 @@ class Classification:
     :ivar tier: ``deterministic`` (fast/standard) or ``heuristic`` (deep).
     :ivar outcome: ``rejected`` for a blocking finding, ``advisory`` for a
         non-blocking one, or ``None`` when the severity maps to neither.
-    :ivar domain: Content domain; :data:`DEFAULT_DOMAIN` in the core provider.
+    :ivar domain: Content domain from
+        :func:`~docsentinel.telemetry.builtin.domain.domain_for`:
+        :data:`DEFAULT_DOMAIN` (``"docs"``, the default content domain) unless
+        ``builtin:domain`` is loaded.
     """
 
     fault_class: str
@@ -127,12 +128,16 @@ def classify(finding: Finding, config: Config, *, strict: bool = False) -> Class
     under ``strict`` (the CLI's ``--strict``). Any other severity has no mapped
     outcome (``None``). Baselined findings never reach this function, so
     ``suppressed`` is not produced here; ``pass`` describes a clean rule, not a
-    finding.
+    finding. The domain is :func:`~docsentinel.telemetry.builtin.domain.domain_for`
+    of the finding's path, the same value as the report's ``doc.domain``.
 
     :param finding: The reported finding.
-    :param config: The effective scan configuration.
+    :param config: The effective scan configuration (``builtin:domain`` and
+        ``telemetry_domains`` decide the domain).
     :param strict: Whether warnings are blocking (``--strict``).
     :returns: The finding's classification.
+    :raises docsentinel.config.ConfigError: If an injected ``config`` holds an
+        invalid ``telemetry_domains`` or ``telemetry_extensions`` value.
     """
     rule = RULES.get(finding.rule)
     tier = tier_for_profile(rule.profile if rule is not None else config.profile)
@@ -148,4 +153,5 @@ def classify(finding: Finding, config: Config, *, strict: bool = False) -> Class
         fault_class=FAULT_CLASSES.get(finding.rule, UNMAPPED_FAULT_CLASS),
         tier=tier,
         outcome=outcome,
+        domain=domain_for(finding.path, config),
     )

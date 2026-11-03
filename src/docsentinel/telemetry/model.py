@@ -27,6 +27,7 @@ from typing import Any, Final, Optional, Union
 
 from docsentinel.config import Config
 from docsentinel.models import Finding, ScanResult
+from docsentinel.telemetry.builtin.domain import DomainTable, domain_table
 from docsentinel.telemetry.classify import classify, rule_title
 from docsentinel.telemetry.events import utc_now_iso
 from docsentinel.telemetry.extensions import LoadedExtensions, apply_report_hooks
@@ -107,11 +108,15 @@ FLAT_PROBLEM_SCHEMA: Final[Mapping[str, Variable]] = _frozen(
 )
 
 #: Members of a document. ``bytes`` is null only for a finding path outside the
-#: discovered inventory (for example a ``DS204`` Python source).
+#: discovered inventory (for example a ``DS204`` Python source). ``domain`` is a core
+#: key (threat model 0007-extensions M24): always present, set from
+#: :func:`~docsentinel.telemetry.builtin.domain.domain_for` and never from a hook;
+#: untrusted, as the repository asserts it.
 DOCUMENT_SCHEMA: Final[Mapping[str, Variable]] = _frozen(
     {
         "path": Variable("str", UNTRUSTED),
         "bytes": Variable("int|null", TRUSTED),
+        "domain": Variable("str", UNTRUSTED),
         "problem_count": Variable("int", TRUSTED),
         "severity_counts": Variable("dict[str,int]", TRUSTED),
         "problems": Variable("list[problem]", None, PROBLEM_SCHEMA),
@@ -244,6 +249,9 @@ class ReportModel:
         Problems keep the order of ``result.findings``. ``inventory`` repeats
         ``result.documents`` verbatim as ``{path, bytes}`` records, so the schema-1
         ``json-v1`` template can reproduce the legacy ``documents`` list exactly.
+        Every document carries the core ``domain`` from
+        :func:`~docsentinel.telemetry.builtin.domain.domain_for` (``"docs"`` unless
+        ``builtin:domain`` is in ``config.telemetry_extensions``); no hook can set it.
 
         :param result: The completed scan.
         :param config: The effective scan configuration.
@@ -266,6 +274,8 @@ class ReportModel:
             returns invalid or oversized data.
         :raises ValueError: If ``model`` does not match :data:`MODEL_ID_PATTERN`; the
             rejected value is never echoed, as it is untrusted invoker input.
+        :raises docsentinel.config.ConfigError: If an injected ``config`` holds an
+            invalid ``telemetry_domains`` or ``telemetry_extensions`` value.
         """
         if extensions and not isinstance(extensions, LoadedExtensions):
             raise TypeError("extensions must be a LoadedExtensions registry from resolve_extensions")
@@ -274,14 +284,18 @@ class ReportModel:
                 "report model id must be 1-128 ASCII characters from [A-Za-z0-9._:/@+-], starting with a letter or digit"
             )
 
+        domains = domain_table(config)
         documents: dict[str, dict[str, JsonValue]] = {}
         for document in result.documents:
-            documents.setdefault(document.path, ReportModel._document(document.path, document.bytes))
+            if document.path not in documents:
+                documents[document.path] = ReportModel._document(document.path, document.bytes, domains)
         flat: list[dict[str, JsonValue]] = []
         flat_for: dict[int, dict[str, JsonValue]] = {}
         for finding in result.findings:
             problem = _problem(finding, config, strict=strict)
-            target = documents.setdefault(finding.path, ReportModel._document(finding.path, None))
+            target = documents.get(finding.path)
+            if target is None:
+                target = documents[finding.path] = ReportModel._document(finding.path, None, domains)
             target["problems"].append(problem)
             twin = {**problem, "document_path": finding.path}
             flat.append(twin)
@@ -323,11 +337,20 @@ class ReportModel:
         return context
 
     @staticmethod
-    def _document(path: str, size: Optional[int]) -> dict[str, JsonValue]:
+    def _document(path: str, size: Optional[int], domains: DomainTable) -> dict[str, JsonValue]:
         """Return an empty document entry; counts are filled once all problems are attached.
 
         :param path: Document path relative to the scan root.
         :param size: Size in bytes, or ``None`` for a path outside the inventory.
+        :param domains: The effective configuration's domain table; ``domain`` comes
+            only from it (M24).
         :returns: The document mapping with an empty ``problems`` list.
         """
-        return {"path": path, "bytes": size, "problem_count": 0, "severity_counts": {}, "problems": []}
+        return {
+            "path": path,
+            "bytes": size,
+            "domain": domains.domain(path),
+            "problem_count": 0,
+            "severity_counts": {},
+            "problems": [],
+        }

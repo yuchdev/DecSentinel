@@ -83,7 +83,7 @@ def no_import(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 def calc_builtin(monkeypatch: pytest.MonkeyPatch):
     """Register a ``calc`` builtin in the static table for the duration of a test."""
 
-    def factory() -> SimpleNamespace:
+    def factory(config: Config) -> SimpleNamespace:
         """Build the ``calc`` extension counting the documents."""
         return _ext("calc", provide_run=lambda model: {"documents": len(model["documents"])})
 
@@ -128,13 +128,13 @@ def test_python_spec_grammar_is_refused_before_any_import(spec: str, no_import: 
     assert no_import == []
 
 
-@pytest.mark.parametrize("spec", ["builtin:../x", "builtin:os", "builtin:__init__", "builtin:domain", "other:x", ""])
+@pytest.mark.parametrize("spec", ["builtin:../x", "builtin:os", "builtin:__init__", "builtin:not_shipped", "other:x", ""])
 def test_unknown_or_malformed_builtin_is_refused_without_import(spec: str, no_import: list[str], tmp_path):
     """
     [Unit] extensions: verifies a builtin spec resolves only through the static table (M5).
 
     Scenario:
-        Given a traversal, a stdlib module name, a dunder, a not-yet-shipped builtin and an unknown prefix
+        Given a traversal, a stdlib module name, a dunder, a name not in the table and an unknown prefix
         When resolve_extensions runs
         Then each is an ExtensionError and import_module/find_spec are never called.
 
@@ -148,6 +148,30 @@ def test_unknown_or_malformed_builtin_is_refused_without_import(spec: str, no_im
     """
     with pytest.raises(ExtensionError):
         resolve_extensions((spec,), config=Config(), allow_python=True, root=tmp_path, cwd=tmp_path)
+    assert no_import == []
+
+
+@pytest.mark.parametrize("name", ["domain", "document_stats"])
+def test_shipped_builtins_resolve_without_import(name: str, no_import: list[str], tmp_path):
+    """
+    [Unit] extensions: verifies the two shipped builtins resolve through the static table with no import (M5).
+
+    Scenario:
+        Given ``builtin:domain`` or ``builtin:document_stats`` from argv with the gate closed
+        When resolve_extensions runs
+        Then the registry holds exactly that builtin and import_module/find_spec are never called.
+
+    Boundaries:
+        - Focus: threat model M5 for the Story 04.0 Task 02 builtins
+        - Fixtures/params: one builtin per case
+        - Scope: resolve_extensions
+
+    On failure, first check:
+        - ``builtin.BUILTIN_EXTENSIONS``
+    """
+    loaded = resolve_extensions((f"builtin:{name}",), config=Config(), allow_python=False, root=tmp_path, cwd=tmp_path)
+
+    assert loaded.names == (name,) and loaded.builtin_specs == (f"builtin:{name}",)
     assert no_import == []
 
 
@@ -226,7 +250,7 @@ def test_builtin_reporting_a_different_name_is_refused(monkeypatch: pytest.Monke
     On failure, first check:
         - the ``expected`` check in ``extensions._admit``
     """
-    monkeypatch.setattr(builtin, "BUILTIN_EXTENSIONS", MappingProxyType({"calc": lambda: _ext("other")}))
+    monkeypatch.setattr(builtin, "BUILTIN_EXTENSIONS", MappingProxyType({"calc": lambda config: _ext("other")}))
     with pytest.raises(ExtensionError, match="different name"):
         resolve_extensions(("builtin:calc",), config=Config(), allow_python=False, root=tmp_path, cwd=tmp_path)
 

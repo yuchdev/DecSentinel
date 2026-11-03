@@ -32,7 +32,7 @@
       "each": {
         "path": { "$var": "doc.path" },
         "bytes": { "$var": "doc.bytes" },
-        "domain": "docs",
+        "domain": { "$var": "doc.domain", "$default": "docs" },
         "problems": {
           "$for": "doc.problems",
           "as": "p",

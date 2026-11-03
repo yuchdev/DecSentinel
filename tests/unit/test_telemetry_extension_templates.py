@@ -502,7 +502,7 @@ def test_requires_check_never_loads_anything(monkeypatch: pytest.MonkeyPatch):
     """
     calls: list[int] = []
     monkeypatch.setattr(
-        builtin, "BUILTIN_EXTENSIONS", MappingProxyType({"domain": lambda: calls.append(1) or _ext("domain")})
+        builtin, "BUILTIN_EXTENSIONS", MappingProxyType({"domain": lambda config: calls.append(1) or _ext("domain")})
     )
     template = validate_template(_text(_line("x", []), requires=("domain",)))
 
