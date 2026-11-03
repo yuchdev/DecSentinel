@@ -14,7 +14,7 @@ renderer, and prove it with two shipped examples.
 
 | Task | Deliverable |
 |---|---|
-| [01](/docs/roadmap/0007-telemetry-driven-reporting/04.0-extensions/01-extension-api-and-loader.md) | `Extension` Protocol, namespacing, loader for `builtin:` and `python:`, argv-only trust gate in the shared importlib helper, error model (M1-M17, M25-M33) |
+| [01](/docs/roadmap/0007-telemetry-driven-reporting/04.0-extensions/01-extension-api-and-loader.md) ✅ | `Extension` Protocol, namespacing, loader for `builtin:` and `python:`, argv-only trust gate in the shared importlib helper, error model (M1-M17, M25-M33) |
 | [02](/docs/roadmap/0007-telemetry-driven-reporting/04.0-extensions/02-domain-and-custom-calc-examples.md) | `builtin:domain` (path -> domain, core `doc.domain`), `builtin:document_stats` (custom calculation), config and docs for writing your own (M18, M20-M24, M34) |
 
 ## Definition of done
