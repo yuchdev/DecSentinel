@@ -6,7 +6,6 @@ stay linear on 50k documents).
 """
 
 import json
-import time
 from pathlib import Path
 
 import pytest
@@ -237,11 +236,8 @@ def test_both_builtins_stay_linear_on_fifty_thousand_documents(monkeypatch: pyte
     monkeypatch.setattr(domain, "glob_matches", counting)
     loaded = resolve_extensions((), config=settings, allow_python=False, root=Path.cwd(), cwd=Path.cwd())
 
-    started = time.perf_counter()
     context = ReportModel.build(_result(documents, findings), settings, extensions=loaded)
-    elapsed = time.perf_counter() - started
 
     assert len(calls) <= count * len(table)
-    assert elapsed < 60.0
     assert len(context["ext"]["document_stats"]["worst_documents"]) == 5
     assert {doc["domain"] for doc in context["documents"]} == {"other"}

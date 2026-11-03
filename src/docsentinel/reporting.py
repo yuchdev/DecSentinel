@@ -152,12 +152,15 @@ def render(
             raise ExtensionError(
                 "a python: extension needs root= (the scan root) so its origin can be checked against the checkout"
             )
+        # root/cwd only feed the M6 origin check of a python: spec, so a plain render
+        # never reads the process cwd (it may no longer exist).
+        needs_origin = _has_python_spec(extensions)
         loaded = resolve_extensions(
             extensions,
             config=settings,
             allow_python=allow_python_extensions,
-            root=Path(root) if root is not None else Path.cwd(),
-            cwd=Path.cwd(),
+            root=Path(root) if root is not None else (Path.cwd() if needs_origin else Path(".")),
+            cwd=Path.cwd() if needs_origin else Path("."),
         )
     if loaded.builtin_specs != settings.telemetry_extensions:
         # The effective Config names exactly the loaded builtins (argv specs merged),

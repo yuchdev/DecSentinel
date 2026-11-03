@@ -115,8 +115,9 @@ example that maps `.claude/agents/**` and `.claude/skills/**` to `agent`.
 With `builtin:domain` loaded, the packaged `json` report shows each document's domain,
 and a template can also read `doc.ext.domain.name` (the same label) and
 `doc.ext.domain.matched` (the glob that matched, or `null` when the default applied).
-The same label goes to fault events (Milestone 0006), so a report and the event stream
-never disagree. You can also enable the extension for one run with
+The Milestone 0006 fault-event adapter is not implemented yet; when it lands it will take
+its `domain` from this same function, so a report and the event stream cannot disagree.
+You can also enable the extension for one run with
 `--extension builtin:domain` instead of `telemetry_extensions`.
 
 ---

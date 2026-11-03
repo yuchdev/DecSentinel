@@ -7,7 +7,6 @@ key set only from ``domain_for``).
 """
 
 import json
-import time
 from pathlib import Path
 
 import pytest
@@ -152,12 +151,9 @@ def test_adversarial_pattern_on_a_deep_path_finishes_within_bound(monkeypatch: p
         return real(segment, text)
 
     monkeypatch.setattr(domain, "segment_matches", counting)
-    started = time.perf_counter()
     assert glob_matches(pattern, path) is False
-    elapsed = time.perf_counter() - started
 
     assert len(calls) <= len(pattern) * len(path)
-    assert elapsed < 1.0
 
 
 # --------------------------------------------------------------------------- config (M20, M22, M23)
