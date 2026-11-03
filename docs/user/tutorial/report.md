@@ -293,7 +293,7 @@ readability.
 |------------|------------------|-------------------------------------------------------------------------------------|
 | `path`     | string           | Path relative to the scan root, `/`-separated.                                      |
 | `bytes`    | integer or null  | File size in bytes. `null` only for a finding path that is not a scanned document.  |
-| `domain`   | string           | Always `"docs"` for the packaged template.                                          |
+| `domain`   | string           | Content domain: `"docs"` unless `builtin:domain` maps the path (see [Custom Reports](custom-reports.md#domains-labelling-documents-by-path)). |
 | `problems` | array of objects | The document's findings. Empty array for a clean document.                          |
 
 ### `documents[].problems[]`
@@ -465,6 +465,9 @@ own template:
 A template is validated before the scan runs. An unknown name, an unreadable file or an invalid
 template prints `Scan failed: ...` on stderr and exits `2`. `docsentinel doctor` lists the
 packaged templates and the ones it finds in `report_templates_dir`.
+
+[Custom Reports](custom-reports.md) walks through writing a template and adding your own data
+with an extension, end to end.
 
 ---
 
