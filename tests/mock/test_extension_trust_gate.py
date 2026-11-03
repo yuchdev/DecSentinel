@@ -45,6 +45,7 @@ def imports(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFa
     module.make = lambda: SimpleNamespace(name="good", provide_run=lambda model: {"ok": True})  # type: ignore[attr-defined]
 
     def fake_import(name: str, *args: Any, **kwargs: Any) -> Any:
+        """Record the request; return the mocked good module, refuse other ``ds_`` names."""
         requested.append(name)
         if name == GOOD:
             return module
@@ -53,6 +54,7 @@ def imports(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFa
         return real_import(name, *args, **kwargs)
 
     def fake_find(name: str, *args: Any, **kwargs: Any) -> Any:
+        """Record the request; return an outside spec for the good module, refuse other ``ds_`` names."""
         requested.append(name)
         if name == GOOD:
             return importlib.machinery.ModuleSpec(GOOD, None, origin=str(outside))
@@ -91,7 +93,7 @@ def test_config_python_entry_is_a_config_error_whatever_the_gate(
     capsys: pytest.CaptureFixture[str],
 ):
     """
-    [Mock] extension gate: verifies a python: entry in config is a ConfigError with the flag, env or neither (M1).
+    [Unit] extension gate (mock): verifies a python: entry in config is a ConfigError with the flag, env or neither (M1).
 
     Scenario:
         Given a docsentinel.toml naming ``python:<planted>:make``
@@ -126,7 +128,7 @@ def test_config_python_entry_is_a_config_error_whatever_the_gate(
 @pytest.mark.parametrize("entry", ['["python:m:f"]', '["builtin:../x"]', '["other:x"]', '"builtin:calc"', "[3]"])
 def test_load_config_refuses_non_builtin_entries(entry: str, tmp_path: Path):
     """
-    [Mock] extension gate: verifies load_config refuses every non-builtin telemetry_extensions entry (M1).
+    [Unit] extension gate (mock): verifies load_config refuses every non-builtin telemetry_extensions entry (M1).
 
     Scenario:
         Given a python:, a malformed builtin, an unknown prefix, a bare string and a non-string entry
@@ -149,7 +151,7 @@ def test_load_config_refuses_non_builtin_entries(entry: str, tmp_path: Path):
 
 def test_load_config_accepts_builtin_entries_in_order(tmp_path: Path):
     """
-    [Mock] extension gate: verifies builtin entries load in configured order, from pyproject too (M1, M25).
+    [Unit] extension gate (mock): verifies builtin entries load in configured order, from pyproject too (M1, M25).
 
     Scenario:
         Given ``[tool.doc_sentinel] telemetry_extensions = ["builtin:b", "builtin:a"]`` and a duplicate case
@@ -183,7 +185,7 @@ def test_argv_python_spec_without_the_gate_is_refused_before_any_import(
     imports: list[str], tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ):
     """
-    [Mock] extension gate: verifies --extension python:... without the gate is refused, nothing resolved (M2, M4).
+    [Unit] extension gate (mock): verifies --extension python:... without the gate is refused, nothing resolved (M2, M4).
 
     Scenario:
         Given ``--extension python:<planted>:make`` and no gate
@@ -218,7 +220,7 @@ def test_argv_python_spec_with_the_gate_is_accepted(
     capsys: pytest.CaptureFixture[str],
 ):
     """
-    [Mock] extension gate: verifies a python: spec runs with --allow-python-extensions or the env var exactly 1 (M2).
+    [Unit] extension gate (mock): verifies a python: spec runs with --allow-python-extensions or the env var exactly 1 (M2).
 
     Scenario:
         Given a module that the mocked machinery locates outside the root and cwd
@@ -253,7 +255,7 @@ def test_env_values_other_than_exactly_one_are_refused(
     value: str, imports: list[str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ):
     """
-    [Mock] extension gate: verifies the env gate opens only for exactly ``"1"`` (M2).
+    [Unit] extension gate (mock): verifies the env gate opens only for exactly ``"1"`` (M2).
 
     Scenario:
         Given DOCSENTINEL_ALLOW_PYTHON_EXTENSIONS set to a truthy-looking value other than ``1``
@@ -278,7 +280,7 @@ def test_env_values_other_than_exactly_one_are_refused(
 
 def test_library_api_ignores_the_environment(imports: list[str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """
-    [Mock] extension gate: verifies render/scan/resolve_extensions refuse with the env var set and the keyword false (M2).
+    [Unit] extension gate (mock): verifies render/scan/resolve_extensions refuse with the env var set and the keyword false (M2).
 
     Scenario:
         Given DOCSENTINEL_ALLOW_PYTHON_EXTENSIONS=1 in the environment
@@ -309,7 +311,7 @@ def test_library_api_ignores_the_environment(imports: list[str], tmp_path: Path,
 
 def test_render_with_a_config_python_entry_is_a_config_error(imports: list[str], tmp_path: Path):
     """
-    [Mock] extension gate: verifies render() refuses an injected Config naming python: even with the keyword (M1).
+    [Unit] extension gate (mock): verifies render() refuses an injected Config naming python: even with the keyword (M1).
 
     Scenario:
         Given ``Config(telemetry_extensions=("python:...",))`` and ``allow_python_extensions=True``
@@ -334,7 +336,7 @@ def test_render_python_spec_without_root_is_refused_before_any_import(
     imports: list[str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     """
-    [Mock] extension gate: verifies render() with the gate open but no root refuses a python: spec (M6).
+    [Unit] extension gate (mock): verifies render() with the gate open but no root refuses a python: spec (M6).
 
     Scenario:
         Given ``render(..., extensions=("python:<module>:make",), allow_python_extensions=True)`` without ``root``
@@ -369,7 +371,7 @@ def test_side_commands_never_resolve_extensions(
     capsys: pytest.CaptureFixture[str],
 ):
     """
-    [Mock] extension gate: verifies doctor/rules/init/baseline never import a configured extension (M32).
+    [Unit] extension gate (mock): verifies doctor/rules/init/baseline never import a configured extension (M32).
 
     Scenario:
         Given a pyproject naming ``python:<planted>:make`` in telemetry_extensions and the gate env set
@@ -414,7 +416,7 @@ def test_doctor_lists_builtin_specs_and_a_closed_gate(
     imports: list[str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ):
     """
-    [Mock] extension gate: verifies doctor lists configured builtin specs and the closed gate (M32).
+    [Unit] extension gate (mock): verifies doctor lists configured builtin specs and the closed gate (M32).
 
     Scenario:
         Given telemetry_extensions = ["builtin:domain"] and no gate env

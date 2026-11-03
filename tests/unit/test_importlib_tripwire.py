@@ -252,6 +252,7 @@ def _reflection_violation(
     """
 
     def guarded(target: Optional[ast.AST]) -> bool:
+        """Return whether ``target`` is an importlib/builtins alias or a ``sys.modules`` lookup."""
         return _is_guarded_target(target, aliases, sys_names, modules_names)
 
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in ("vars", "getattr"):
@@ -391,6 +392,7 @@ def _folded_strings(tree: ast.AST) -> list[tuple[int, str]]:
     """Return every string constant, plus constant-folded ``+`` concatenations and f-strings."""
 
     def fold(node: ast.AST) -> Optional[str]:
+        """Return the constant string value of ``node``, or ``None`` when it does not fold."""
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
             return node.value
         if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):

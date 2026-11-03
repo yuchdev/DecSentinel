@@ -6,13 +6,14 @@ filters: threat model ``docs/security/threat-model-0007-extensions-2026-11-03.md
 
 import json
 import math
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from typing import Any
 
 import pytest
 
 from docsentinel.config import Config
 from docsentinel.models import Document, Finding, ScanResult
+from docsentinel.telemetry import builtin
 from docsentinel.telemetry.engine import render_template
 from docsentinel.telemetry.extensions import (
     ExtensionFilter,
@@ -41,18 +42,22 @@ _RESULT = ScanResult(
 
 
 def _line(text: str, used: list[str]) -> dict[str, Any]:
+    """Return a text ``line`` node."""
     return {"type": "line", "text": text, "variables_used": used}
 
 
 def _docs(*body: dict[str, Any]) -> dict[str, Any]:
+    """Return a loop node over ``documents`` (as ``doc``) holding ``body``."""
     return {"type": "loop", "over": "documents", "as": "doc", "body": list(body)}
 
 
 def _problems(*body: dict[str, Any]) -> dict[str, Any]:
+    """Return a loop over each document's ``problems`` (as ``p``) holding ``body``."""
     return _docs({"type": "loop", "over": "doc.problems", "as": "p", "body": list(body)})
 
 
 def _text(*lines: dict[str, Any], requires: tuple[str, ...] = ("calc",), sink: str = "terminal") -> dict[str, Any]:
+    """Return a raw text template holding ``lines``."""
     return {
         "template_version": 1,
         "name": "t",
@@ -64,21 +69,25 @@ def _text(*lines: dict[str, Any], requires: tuple[str, ...] = ("calc",), sink: s
 
 
 def _rejects(raw: dict[str, Any], fragment: str):
+    """Assert that validating ``raw`` raises a TemplateError containing ``fragment``."""
     with pytest.raises(TemplateError) as caught:
         validate_template(raw)
     assert fragment in str(caught.value), str(caught.value)
 
 
 def _ext(name: str = "calc", **hooks: Any) -> SimpleNamespace:
+    """Return an in-memory extension object named ``name`` with ``hooks``."""
     return SimpleNamespace(name=name, **hooks)
 
 
 def _render(template: Template, loaded: LoadedExtensions) -> str:
+    """Render ``template`` over the fixed scan result with ``loaded``."""
     context = ReportModel.build(_RESULT, Config(), extensions=loaded)
     return render_template(template, context, extensions=loaded)
 
 
 def _calc(**filters: ExtensionFilter) -> LoadedExtensions:
+    """Admit a ``calc`` extension with run/document/problem data and ``filters``."""
     return admit_extensions(
         [
             _ext(
@@ -92,6 +101,7 @@ def _calc(**filters: ExtensionFilter) -> LoadedExtensions:
 
 
 def _scalar_filter(function: Any, arity: int = 0, kinds: frozenset[str] = frozenset({"scalar"})) -> ExtensionFilter:
+    """Return an ExtensionFilter wrapping ``function``."""
     return ExtensionFilter(function=function, arity=arity, input_kinds=kinds)  # type: ignore[arg-type]
 
 
@@ -347,7 +357,7 @@ def test_extension_filter_renders_and_its_output_is_sinked():
 
 
 class _StrSub(str):
-    pass
+    """A ``str`` subclass (not an exact JSON scalar)."""
 
 
 @pytest.mark.parametrize(
@@ -406,6 +416,7 @@ def test_extension_filter_input_containers_are_frozen():
     """
 
     def size(value: Any) -> int:
+        """Try to mutate the input, then return its length."""
         value.append("x")
         return len(value)
 
@@ -489,10 +500,6 @@ def test_requires_check_never_loads_anything(monkeypatch: pytest.MonkeyPatch):
     On failure, first check:
         - that ``check_template`` only compares names
     """
-    from types import MappingProxyType
-
-    from docsentinel.telemetry import builtin
-
     calls: list[int] = []
     monkeypatch.setattr(
         builtin, "BUILTIN_EXTENSIONS", MappingProxyType({"domain": lambda: calls.append(1) or _ext("domain")})

@@ -7,6 +7,7 @@ patched into the static table, so no module is ever imported.
 
 import importlib
 import importlib.util
+import json
 import math
 import sys
 import tracemalloc
@@ -17,6 +18,7 @@ from typing import Any, Optional
 import pytest
 
 from docsentinel import config as config_module
+from docsentinel.baseline import load_baseline
 from docsentinel.config import Config, ConfigError
 from docsentinel.models import Document, Finding, ScanResult
 from docsentinel.telemetry import builtin, engine, extensions, filters, loader
@@ -68,6 +70,7 @@ def no_import(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     calls: list[str] = []
 
     def refuse(name: str, *args: Any, **kwargs: Any) -> Any:
+        """Record the call and fail the test."""
         calls.append(name)
         raise AssertionError(f"import machinery called for {name}")
 
@@ -77,9 +80,13 @@ def no_import(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 
 
 @pytest.fixture
-def calc_builtin(monkeypatch: pytest.MonkeyPatch) -> None:
+def calc_builtin(monkeypatch: pytest.MonkeyPatch):
     """Register a ``calc`` builtin in the static table for the duration of a test."""
-    factory = lambda: _ext("calc", provide_run=lambda model: {"documents": len(model["documents"])})  # noqa: E731
+
+    def factory() -> SimpleNamespace:
+        """Build the ``calc`` extension counting the documents."""
+        return _ext("calc", provide_run=lambda model: {"documents": len(model["documents"])})
+
     monkeypatch.setattr(builtin, "BUILTIN_EXTENSIONS", MappingProxyType({"calc": factory}))
 
 
@@ -292,7 +299,7 @@ def test_str_subclass_name_is_refused():
     """
 
     class Sneaky(str):
-        pass
+        """A ``str`` subclass used as an extension name."""
 
     with pytest.raises(ExtensionError):
         admit_extensions([_ext(Sneaky("calc"))])  # type: ignore[arg-type]
@@ -318,12 +325,16 @@ def test_name_property_is_read_once():
     reads: list[int] = []
 
     class Shifty:
+        """An extension whose ``name`` changes on the second read."""
+
         @property
         def name(self) -> str:
+            """Return ``calc`` on the first read and ``domain`` afterwards."""
             reads.append(1)
             return "calc" if len(reads) == 1 else "domain"
 
         def provide_run(self, model: Any) -> dict[str, Any]:
+            """Return fixed run data."""
             return {"ok": True}
 
     loaded = admit_extensions([Shifty()])
@@ -354,14 +365,17 @@ def test_hooks_are_looked_up_once():
     lookups: list[str] = []
 
     class Counting:
+        """An extension that records every attribute lookup."""
+
         name = "calc"
 
         def __getattribute__(self, attribute: str) -> Any:
+            """Record ``attribute`` and look it up normally."""
             lookups.append(attribute)
             return object.__getattribute__(self, attribute)
 
-        def provide_document(self, doc: Any, model: Any) -> None:
-            return None
+        def provide_document(self, doc: Any, model: Any):
+            """Contribute no document data."""
 
     _build(Counting())
 
@@ -515,7 +529,8 @@ def test_hook_arguments_are_deep_frozen():
     """
     errors: list[str] = []
 
-    def document(doc: Any, model: Any) -> None:
+    def document(doc: Any, model: Any):
+        """Try every mutation of the frozen context and record each refusal."""
         for attempt in (
             lambda: doc["problems"][0].__setitem__("message", "x") if doc["problems"] else None,
             lambda: doc["problems"].append({}),
@@ -526,7 +541,6 @@ def test_hook_arguments_are_deep_frozen():
                 attempt()
             except (TypeError, AttributeError) as exc:
                 errors.append(type(exc).__name__)
-        return None
 
     context = _build(_ext(provide_document=document))
 
@@ -556,6 +570,7 @@ def test_mutating_a_returned_tree_after_return_does_not_change_the_report():
     kept: list[dict[str, Any]] = []
 
     def problem(item: Any, doc: Any, model: Any) -> dict[str, Any]:
+        """Mutate the previously returned tree, then return a fresh one."""
         if kept:
             kept[-1]["n"] = "mutated"
             kept[-1]["list"].append("mutated")
@@ -574,14 +589,15 @@ def test_mutating_a_returned_tree_after_return_does_not_change_the_report():
 
 
 class _DictSub(dict):
-    pass
+    """A ``dict`` subclass (not exact JSON data)."""
 
 
 class _StrSub(str):
-    pass
+    """A ``str`` subclass (not exact JSON data)."""
 
 
 def _cyclic() -> dict[str, Any]:
+    """Return a tree holding a self-containing list."""
     items: list[Any] = []
     items.append(items)
     return {"items": items}
@@ -646,6 +662,7 @@ def test_tuples_are_accepted_as_lists_and_none_attaches_nothing():
 
 
 def _nested(depth: int) -> dict[str, Any]:
+    """Return dicts nested ``depth`` levels deep."""
     tree: dict[str, Any] = {}
     current = tree
     for _ in range(depth - 1):
@@ -746,8 +763,6 @@ def test_size_walk_stops_at_the_limit_without_serializing(monkeypatch: pytest.Mo
     On failure, first check:
         - ``charge`` inside ``extensions.validated_copy``
     """
-    import json
-
     monkeypatch.setattr(json, "dumps", lambda *a, **k: (_ for _ in ()).throw(AssertionError("serialized")))
     big = "x" * 1000
     with pytest.raises(extensions._Oversize):
@@ -855,7 +870,8 @@ def test_hook_exceptions_become_extension_errors(raised: BaseException):
         - ``extensions._call``
     """
 
-    def hook(model: Any) -> None:
+    def hook(model: Any):
+        """Raise the parametrized exception."""
         raise raised
 
     with pytest.raises(ExtensionError, match=f"provide_run failed: {type(raised).__qualname__}") as caught:
@@ -881,7 +897,8 @@ def test_keyboard_interrupt_propagates():
         - the ``except KeyboardInterrupt: raise`` in ``extensions._call``
     """
 
-    def hook(model: Any) -> None:
+    def hook(model: Any):
+        """Raise an exact KeyboardInterrupt."""
         raise KeyboardInterrupt
 
     with pytest.raises(KeyboardInterrupt):
@@ -909,7 +926,8 @@ def test_hook_failure_message_is_bounded_and_neutralized():
     hostile = type(ESC + "[2J", (Exception,), {})
     detail = ESC + "[31m" + RLO + "y" * 1024
 
-    def hook(model: Any) -> None:
+    def hook(model: Any):
+        """Raise the exception with a hostile class name and detail."""
         raise hostile(detail)
 
     with pytest.raises(ExtensionError) as caught:
@@ -942,10 +960,14 @@ def test_unprintable_exception_is_described_safely():
     """
 
     class Bad(Exception):
+        """An exception whose message cannot be read."""
+
         def __str__(self) -> str:
+            """Fail to render the message."""
             raise ValueError("no")
 
-    def hook(model: Any) -> None:
+    def hook(model: Any):
+        """Raise the unprintable exception."""
         raise Bad
 
     with pytest.raises(ExtensionError, match="<unprintable>"):
@@ -979,6 +1001,7 @@ def test_extension_error_is_a_value_error_with_safe_str():
 
 
 def _filter(**overrides: Any) -> ExtensionFilter:
+    """Return a valid ExtensionFilter with ``overrides`` applied."""
     values = {"function": lambda value: "ok", "arity": 0, "input_kinds": frozenset({"scalar"})}
     values.update(overrides)
     return ExtensionFilter(**values)
@@ -1110,7 +1133,8 @@ def test_event_path_swallows_hook_failures_with_one_warning_per_extension():
         - ``EventHookGuard.problem_ext``
     """
 
-    def broken(problem: Any, doc: Any, model: Any) -> None:
+    def broken(problem: Any, doc: Any, model: Any):
+        """Exit with a hostile, long message."""
         raise SystemExit(ESC + "x" * 2000)
 
     loaded = admit_extensions(
@@ -1144,7 +1168,8 @@ def test_event_path_does_not_swallow_keyboard_interrupt():
         - ``extensions._call``
     """
 
-    def interrupted(problem: Any, doc: Any, model: Any) -> None:
+    def interrupted(problem: Any, doc: Any, model: Any):
+        """Raise an exact KeyboardInterrupt."""
         raise KeyboardInterrupt
 
     guard = EventHookGuard(admit_extensions([_ext(provide_problem=interrupted)]), warn=lambda message: None)
@@ -1172,8 +1197,6 @@ def test_baseline_and_template_cannot_name_an_extension(tmp_path):
     On failure, first check:
         - unknown-key checks in ``baseline.load_baseline`` and ``loader._Validator.template``
     """
-    from docsentinel.baseline import load_baseline
-
     baseline = tmp_path / "baseline.json"
     baseline.write_text('{"fingerprints": [], "extensions": ["python:m:f"]}', encoding="utf-8")
     with pytest.raises(ValueError):
@@ -1215,6 +1238,7 @@ class _QualnameBombMeta(type):
     """A metaclass whose ``__qualname__`` read raises ``SystemExit(0)``."""
 
     def __getattribute__(cls, attribute: str) -> Any:
+        """Exit on a ``__qualname__`` read, else look the attribute up normally."""
         if attribute == "__qualname__":
             raise SystemExit(0)
         return type.__getattribute__(cls, attribute)
@@ -1225,6 +1249,7 @@ class _QualnameBomb(Exception, metaclass=_QualnameBombMeta):
 
 
 def _raise_bomb(*args: Any) -> Any:
+    """Raise the exception whose class name cannot be read."""
     raise _QualnameBomb("boom")
 
 
@@ -1257,6 +1282,7 @@ class _BoolBomb:
     """An object whose truth value raises ``SystemExit(0)``."""
 
     def __bool__(self) -> bool:
+        """Exit instead of answering."""
         raise SystemExit(0)
 
 
@@ -1290,6 +1316,7 @@ class _ExitingMapping(dict):
     """A mapping whose ``items`` raises ``SystemExit(0)``."""
 
     def items(self) -> Any:
+        """Exit instead of listing the items."""
         raise SystemExit(0)
 
 
@@ -1324,9 +1351,11 @@ class _HostileKind:
     """A frozenset member that hashes like ``scalar`` and raises ``SystemExit(0)`` on comparison."""
 
     def __hash__(self) -> int:
+        """Hash like the ``scalar`` kind."""
         return hash("scalar")
 
     def __eq__(self, other: object) -> bool:
+        """Exit instead of comparing."""
         raise SystemExit(0)
 
 
@@ -1403,12 +1432,14 @@ class _RefusingWatch:
     """A stand-in ModuleWatch that reports a change and refuses it."""
 
     def changed(self) -> bool:
+        """Report a change."""
         return True
 
     def check_path(self):
-        return None
+        """Accept ``sys.path``."""
 
     def check(self):
+        """Refuse the change."""
         raise ExtensionError("python extension refused: module planted was imported during the run")
 
 
@@ -1442,6 +1473,7 @@ class _ExitingPath:
     """A ``__path__`` value whose iteration raises ``SystemExit(0)``."""
 
     def __iter__(self) -> Any:
+        """Exit instead of iterating."""
         raise SystemExit(0)
 
 
@@ -1475,6 +1507,7 @@ class _Impostor:
 
     @property
     def __class__(self) -> Any:  # type: ignore[override]
+        """Exit instead of reporting the class."""
         raise SystemExit(0)
 
 
@@ -1553,7 +1586,8 @@ def test_report_hooks_stop_before_the_next_hook_once_sys_path_points_inside(tmp_
     monkeypatch.setattr(sys, "path", list(sys.path))
     calls: list[str] = []
 
-    def sneak(model: Any) -> None:
+    def sneak(model: Any):
+        """Put ``tmp_path`` on ``sys.path``."""
         sys.path.insert(0, str(tmp_path))
 
     admitted = admit_extensions([_ext("first", provide_run=sneak), _ext("second", provide_run=calls.append)])
@@ -1589,6 +1623,7 @@ def test_event_guard_checks_modules_even_when_sys_modules_keeps_its_size(tmp_pat
     planted.__file__ = str(tmp_path / "ds_n3_victim.py")
 
     def swap(problem: Any, doc: Any, model: Any) -> dict[str, bool]:
+        """Replace a ``sys.modules`` entry, then return valid data."""
         sys.modules["ds_n3_victim"] = planted
         return {"ok": True}
 
@@ -1610,6 +1645,7 @@ class _InterruptSubclass(KeyboardInterrupt):
 
 
 def _raise_interrupt_subclass(*args: Any) -> Any:
+    """Raise a KeyboardInterrupt subclass."""
     raise _InterruptSubclass("planted")
 
 
@@ -1685,6 +1721,7 @@ def test_keyboard_interrupt_subclass_from_a_filter_is_a_template_error():
         subclass("x", ())
 
     def exact(*args: Any) -> Any:
+        """Raise an exact KeyboardInterrupt."""
         raise KeyboardInterrupt
 
     with pytest.raises(KeyboardInterrupt) as caught:
@@ -1697,6 +1734,7 @@ class _InterruptingName:
 
     @property
     def name(self) -> str:
+        """Raise a KeyboardInterrupt subclass instead of a name."""
         raise _InterruptSubclass("name")
 
 
@@ -1704,10 +1742,12 @@ class _InterruptingStr(Exception):
     """An exception whose ``__str__`` raises a KeyboardInterrupt subclass."""
 
     def __str__(self) -> str:
+        """Raise a KeyboardInterrupt subclass instead of a message."""
         raise _InterruptSubclass("str")
 
 
 def _raise_interrupting_str(*args: Any) -> Any:
+    """Raise the exception whose message read interrupts."""
     raise _InterruptingStr()
 
 

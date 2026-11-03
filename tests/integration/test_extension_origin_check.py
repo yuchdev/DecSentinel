@@ -113,7 +113,6 @@ def test_planted_module_in_root_or_cwd_is_refused_and_never_runs(
 
 
 def test_package_with_an_in_root_parent_is_refused_before_the_parent_runs(origin_layer: dict[str, Path]):
-    layout = origin_layer
     """
     [Integration] extension origin check: verifies a dotted spec is refused when its parent package is in-root (M6).
 
@@ -130,6 +129,7 @@ def test_package_with_an_in_root_parent_is_refused_before_the_parent_runs(origin
     On failure, first check:
         - the prefix loop in ``extensions._check_origins``
     """
+    layout = origin_layer
     name = _unique("pkg")
     parent_sentinel = layout["outside"] / f"{name}.parent"
     leaf_sentinel = layout["outside"] / f"{name}.leaf"
@@ -144,7 +144,6 @@ def test_package_with_an_in_root_parent_is_refused_before_the_parent_runs(origin
 
 
 def test_namespace_package_with_an_in_root_location_is_refused(origin_layer: dict[str, Path]):
-    layout = origin_layer
     """
     [Integration] extension origin check: verifies a namespace package spanning the root is refused (M6).
 
@@ -161,6 +160,7 @@ def test_namespace_package_with_an_in_root_location_is_refused(origin_layer: dic
     On failure, first check:
         - ``extensions._spec_locations`` submodule_search_locations handling
     """
+    layout = origin_layer
     name = _unique("ns")
     sentinel = layout["outside"] / f"{name}.leaf"
     (layout["root"] / name).mkdir()
@@ -203,7 +203,6 @@ def test_preimported_in_root_module_is_refused(layout: dict[str, Path], monkeypa
 
 @pytest.mark.skipif(not hasattr(os, "symlink"), reason="symlinks are not available")
 def test_in_root_symlink_to_an_outside_module_is_refused(origin_layer: dict[str, Path]):
-    layout = origin_layer
     """
     [Integration] extension origin check: verifies an in-root symlink to an outside file is still refused (M6).
 
@@ -220,6 +219,7 @@ def test_in_root_symlink_to_an_outside_module_is_refused(origin_layer: dict[str,
     On failure, first check:
         - the lexical candidate in ``extensions._Boundary.refuses``
     """
+    layout = origin_layer
     name = _unique("link")
     sentinel = layout["outside"] / f"{name}.sentinel"
     target = _plant(layout["outside"] / "hidden", "real.py", sentinel, "def make():\n    return None\n")
@@ -300,7 +300,7 @@ def test_missing_module_and_missing_callable_are_bounded_errors(layout: dict[str
 # --------------------------------------------------------------------------- close-review regressions (2026-11-03)
 
 
-def _plant_extension(directory: Path, name: str, sentinel: Path, body: str) -> None:
+def _plant_extension(directory: Path, name: str, sentinel: Path, body: str):
     """Write an outside extension module whose import, factory or hook runs ``body`` parts."""
     _plant(directory, f"{name}.py", sentinel, body)
 

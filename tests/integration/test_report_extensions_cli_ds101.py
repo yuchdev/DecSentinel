@@ -48,14 +48,14 @@ def _template(directory: Path, requires: list[str]) -> Path:
     return path
 
 
-def _install(monkeypatch: pytest.MonkeyPatch, **hooks: Any) -> None:
+def _install(monkeypatch: pytest.MonkeyPatch, **hooks: Any):
     """Register a ``calc`` builtin built from ``hooks``."""
     monkeypatch.setattr(
         builtin, "BUILTIN_EXTENSIONS", MappingProxyType({"calc": lambda: SimpleNamespace(name="calc", **hooks)})
     )
 
 
-def _healthy(monkeypatch: pytest.MonkeyPatch) -> None:
+def _healthy(monkeypatch: pytest.MonkeyPatch):
     """Register a working ``calc`` builtin."""
     _install(
         monkeypatch,
@@ -71,6 +71,7 @@ def scans(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
     real = cli.scan
 
     def recording(*args: Any, **kwargs: Any) -> Any:
+        """Record the ``config`` keyword, then run the real scan."""
         seen.append(kwargs.get("config"))
         return real(*args, **kwargs)
 
@@ -148,7 +149,8 @@ def test_failing_hook_is_exit_two_with_empty_stdout(
     """
     root = asset_case("ds101", "dangling_file_link").root
 
-    def hook(problem: Any, doc: Any, model: Any) -> None:
+    def hook(problem: Any, doc: Any, model: Any):
+        """Raise the parametrized exception from the problem hook."""
         raise raised
 
     _install(monkeypatch, provide_problem=hook)

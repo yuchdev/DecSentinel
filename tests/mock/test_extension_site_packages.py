@@ -63,7 +63,7 @@ def _plant(directory: Path, name: str, sentinel: Path, body: str = "") -> Path:
 
 def test_extension_installed_in_the_running_interpreters_venv_inside_the_root_loads(venv: dict[str, Path]):
     """
-    [Mock] extension site-packages: verifies the running interpreter's own project-local venv is exempt (M6).
+    [Unit] extension site-packages (mock): verifies the running interpreter's own project-local venv is exempt (M6).
 
     Scenario:
         Given an extension and a helper installed in ``<root>/.venv/.../site-packages``, which sysconfig reports
@@ -100,7 +100,7 @@ def test_other_in_root_import_directories_are_still_refused(
     directory: str, venv: dict[str, Path], monkeypatch: pytest.MonkeyPatch
 ):
     """
-    [Mock] extension site-packages: verifies only the running interpreter's site-packages is exempt (M6).
+    [Unit] extension site-packages (mock): verifies only the running interpreter's site-packages is exempt (M6).
 
     Scenario:
         Given an in-root directory on sys.path that is not the running interpreter's site-packages: another venv,
@@ -129,7 +129,7 @@ def test_other_in_root_import_directories_are_still_refused(
 @pytest.mark.skipif(not hasattr(os, "symlink"), reason="symlinks are not available")
 def test_link_in_site_packages_to_an_in_root_file_is_refused(venv: dict[str, Path]):
     """
-    [Mock] extension site-packages: verifies the exemption needs the canonical path in site-packages too (M6).
+    [Unit] extension site-packages (mock): verifies the exemption needs the canonical path in site-packages too (M6).
 
     Scenario:
         Given ``<site-packages>/<name>.py`` symlinked to ``<root>/evil.py``

@@ -489,7 +489,8 @@ def _own_site_packages() -> tuple[str, ...]:
         try:
             value = sysconfig.get_path(key)
         except (KeyError, ValueError, OSError):
-            continue
+            # No such scheme path: nothing is exempt for this key (never widens the exemption).
+            value = None
         if isinstance(value, str) and value:
             found.extend(_spellings(value))
     return tuple(dict.fromkeys(found))
@@ -503,9 +504,11 @@ def _under(path: str, base: str) -> bool:
     :returns: The containment decision.
     """
     try:
-        return os.path.commonpath([path, base]) == base
+        common = os.path.commonpath([path, base])
     except ValueError:
-        return False
+        # Mixed absolute/relative or different drives: no common path, so not below.
+        common = None
+    return common == base
 
 
 @dataclass(frozen=True)
@@ -582,11 +585,15 @@ class _Boundary:
             return False
         text = str.__str__(location)
         try:
-            if self.exempt(text):
-                return False
+            exempt = self.exempt(text)
             candidates = _spellings(text)
         except (OSError, ValueError):
+            # Fail closed: a location that cannot be resolved counts as inside.
+            exempt, candidates = False, None
+        if candidates is None:
             return True
+        if exempt:
+            return False
         stats = [info for _, info in self.anchors if info is not None]
         for candidate in candidates:
             if any(_under(candidate, anchor) for anchor, _ in self.anchors):
@@ -922,7 +929,8 @@ def _origin_paths(origin_roots: object) -> tuple[Path, ...]:
     :returns: Absolute paths, lexically normalized and never resolved, so a symlink
         the invoker named stays the spelling that is anchored.
     :raises ExtensionError: For a single path, a non-sequence, too many entries or an
-        entry that is not a path (including one whose ``__fspath__`` raises). The
+        entry that is not a path (including one whose iteration or ``__fspath__``
+        raises anything but an exact ``KeyboardInterrupt``, as everywhere here). The
         cap is enforced on at most ``MAX + 1`` iterated entries, never on
         ``len()``, so a sequence whose ``__len__`` lies cannot bypass it (I1).
     """
@@ -930,8 +938,10 @@ def _origin_paths(origin_roots: object) -> tuple[Path, ...]:
         raise ExtensionError("origin_roots must be a sequence of paths")
     try:
         entries = tuple(islice(iter(origin_roots), _MAX_SEARCH_LOCATIONS + 1))
-    except Exception as exc:
-        raise ExtensionError("origin_roots must be a sequence of paths") from exc
+    except BaseException as exc:
+        if type(exc) is KeyboardInterrupt:
+            raise
+        raise ExtensionError("origin_roots must be a sequence of paths") from None
     if len(entries) > _MAX_SEARCH_LOCATIONS:
         raise ExtensionError("too many origin_roots")
     found: list[Path] = []
@@ -940,8 +950,10 @@ def _origin_paths(origin_roots: object) -> tuple[Path, ...]:
             raise ExtensionError("origin_roots must be a sequence of paths")
         try:
             text = os.fspath(entry)
-        except Exception as exc:
-            raise ExtensionError("origin_roots must be a sequence of paths") from exc
+        except BaseException as exc:
+            if type(exc) is KeyboardInterrupt:
+                raise
+            raise ExtensionError("origin_roots must be a sequence of paths") from None
         if not isinstance(text, str) or not text:
             raise ExtensionError("origin_roots must be a sequence of paths")
         found.append(Path(os.path.abspath(text)))
@@ -1456,6 +1468,11 @@ def scope_extension_data(context: Mapping[str, JsonValue], requires: Sequence[st
     memo: dict[int, object] = {}
 
     def document(entry: object) -> object:
+        """Return the scoped copy of one document entry, memoized by identity.
+
+        :param entry: A ``documents`` item of the context.
+        :returns: The entry with ``ext`` and every problem's ``ext`` scoped.
+        """
         marker = id(entry)
         if marker not in memo:
             copy = _scoped(entry, allowed)
@@ -1613,6 +1630,11 @@ def validated_copy(value: object, limit: int) -> tuple[dict[str, JsonValue], int
     stack: list[Any] = [(value, None, None, 1)]
 
     def charge(count: int):
+        """Add ``count`` to the estimated serialized size and stop past the cap.
+
+        :param count: The estimated characters of one emitted token.
+        :raises _Oversize: When the running total passes ``limit``.
+        """
         nonlocal used
         used += count
         if used > limit:
