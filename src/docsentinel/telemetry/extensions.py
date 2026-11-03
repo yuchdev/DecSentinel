@@ -29,7 +29,9 @@ Selection and trust gate:
   directory. The scan root is anchored in every spelling the invoker supplied: the
   CLI passes the unresolved absolute argument (``origin_roots``) next to the
   resolved one, so a ``<checkout>/docs`` that is a symlink out of the checkout
-  cannot drop the checkout (amended 2026-11-03, F1). Before any import, a
+  cannot drop the checkout (amended 2026-11-03, F1); it adds the ``$PWD`` logical
+  spellings, and every root spelling's symlink chain is anchored hop by hop
+  (amended 2026-11-03, N5, L1). Before any import, a
   ``sys.path`` entry (``''`` is the cwd) inside the boundary refuses every
   ``python:`` spec; the same ``sys.path`` check runs again after every factory,
   between each factory and its ``filters()`` hook, before every report hook, before
@@ -99,6 +101,7 @@ import sysconfig
 import types
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
+from itertools import islice
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Final, Literal, Optional, Protocol, Union, runtime_checkable
@@ -154,6 +157,9 @@ _MAX_QUALNAME = 64
 _MAX_ECHO = 80
 _MAX_SEARCH_LOCATIONS = 64
 _MAX_ANCESTORS = 256
+#: Bound on the final-component symlink hops followed from one scan-root spelling
+#: (M6, amended 2026-11-03, L1); Linux ``MAXSYMLINKS`` is 40 too.
+_MAX_LINK_HOPS = 40
 
 #: Entries whose presence marks a project root: every marked ancestor of the scan
 #: root (inclusive) is an M6 anchor too (amended 2026-11-03: not only the nearest).
@@ -384,6 +390,41 @@ def _spellings(text: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys((os.path.abspath(text), os.path.realpath(text))))
 
 
+def _link_chain(text: str) -> tuple[str, ...]:
+    """Return every path a scan-root spelling passes through as a symlink (M6, amended 2026-11-03, L1).
+
+    Only the final component is followed, one ``os.readlink`` per hop: for
+    ``elsewhere/rootlink -> <checkout>/docs -> outside/docs`` the result holds
+    ``<checkout>/docs`` and ``outside/docs``, so the checkout stays in the boundary
+    even though neither the given nor the canonical spelling lies inside it. A
+    relative link target is joined to the directory of the link naming it, both
+    as written and with that directory canonicalized. Links inside an intermediate
+    directory component need no walk: :func:`project_roots` and
+    :func:`_spellings` already see through them. The hops only add anchors, so a
+    lexically imprecise hop can widen the boundary but never shrink it.
+
+    :param text: A path string.
+    :returns: The hop spellings, in chain order (empty when ``text`` is no link).
+    :raises ExtensionError: When the chain is longer than :data:`_MAX_LINK_HOPS`
+        (fail closed rather than stop early).
+    """
+    found: list[str] = []
+    current = os.path.abspath(text)
+    for _ in range(_MAX_LINK_HOPS):
+        try:
+            target: Optional[str] = os.readlink(current)
+        except (OSError, ValueError):
+            # Not a link, or unreadable: the chain ends here (EINVAL is the normal end).
+            target = None
+        if target is None:
+            return tuple(dict.fromkeys(found))
+        directory = os.path.dirname(current)
+        canonical = os.path.join(os.path.realpath(directory), target)
+        current = os.path.abspath(os.path.join(directory, target))
+        found.extend((current, os.path.abspath(canonical)))
+    raise ExtensionError("python extensions are refused: the scan root is an implausibly long symlink chain")
+
+
 def _has_project_marker(directory: str) -> bool:
     """Return whether ``directory`` holds one of :data:`PROJECT_ROOT_MARKERS`.
 
@@ -488,10 +529,15 @@ class _Boundary:
         :param origin_roots: Further spellings of the scan root as the invoker wrote
             it (amended 2026-11-03, F1): each is an anchor and its marked ancestors
             are project roots too, so a resolved root that left the checkout through
-            a symlink cannot drop the checkout from the boundary.
+            a symlink cannot drop the checkout from the boundary. Every path a
+            spelling of the root passes through as a final-component symlink is
+            anchored the same way (amended 2026-11-03, L1, :func:`_link_chain`).
         :returns: The boundary.
+        :raises ExtensionError: For an implausibly deep root or long symlink chain.
         """
-        extra = [os.fspath(origin) for origin in origin_roots]
+        given = [os.fspath(origin) for origin in origin_roots]
+        hops = [hop for start in (os.fspath(root), *given) for hop in _link_chain(start)]
+        extra = list(dict.fromkeys((*given, *hops)))
         marked = [entry for start in (os.fspath(root), *extra) for entry in project_roots(Path(start))]
         anchors: dict[str, Optional[os.stat_result]] = {}
         for anchor in (os.fspath(root), os.fspath(cwd), *extra, *marked):
@@ -876,17 +922,26 @@ def _origin_paths(origin_roots: object) -> tuple[Path, ...]:
     :returns: Absolute paths, lexically normalized and never resolved, so a symlink
         the invoker named stays the spelling that is anchored.
     :raises ExtensionError: For a single path, a non-sequence, too many entries or an
-        entry that is not a path.
+        entry that is not a path (including one whose ``__fspath__`` raises). The
+        cap is enforced on at most ``MAX + 1`` iterated entries, never on
+        ``len()``, so a sequence whose ``__len__`` lies cannot bypass it (I1).
     """
     if isinstance(origin_roots, (str, bytes, os.PathLike)) or not isinstance(origin_roots, Sequence):
         raise ExtensionError("origin_roots must be a sequence of paths")
-    if len(origin_roots) > _MAX_SEARCH_LOCATIONS:
+    try:
+        entries = tuple(islice(iter(origin_roots), _MAX_SEARCH_LOCATIONS + 1))
+    except Exception as exc:
+        raise ExtensionError("origin_roots must be a sequence of paths") from exc
+    if len(entries) > _MAX_SEARCH_LOCATIONS:
         raise ExtensionError("too many origin_roots")
     found: list[Path] = []
-    for entry in origin_roots:
+    for entry in entries:
         if not isinstance(entry, (str, os.PathLike)):
             raise ExtensionError("origin_roots must be a sequence of paths")
-        text = os.fspath(entry)
+        try:
+            text = os.fspath(entry)
+        except Exception as exc:
+            raise ExtensionError("origin_roots must be a sequence of paths") from exc
         if not isinstance(text, str) or not text:
             raise ExtensionError("origin_roots must be a sequence of paths")
         found.append(Path(os.path.abspath(text)))
@@ -1268,9 +1323,11 @@ def resolve_extensions(
     :param cwd: The current directory, for the M6 origin check.
     :param origin_roots: Further spellings of the scan root, as the invoker wrote it
         (absolute but unresolved; the CLI passes ``os.path.abspath`` of its argument,
-        or its parent for a file). Each is anchored with its marked ancestors, so a
-        root that is a symlink out of the checkout cannot drop the checkout from the
-        boundary (M6, amended 2026-11-03).
+        its parent for a file, and the ``$PWD``-based logical spellings). Each is
+        anchored with its marked ancestors and its symlink chain, so a root that is a
+        symlink out of the checkout cannot drop the checkout from the boundary (M6,
+        amended 2026-11-03, F1, N5, L1). Pass the root as the user spelled it: a
+        relative spelling is made absolute against the physical cwd (I2).
     :returns: The registry.
     :raises ConfigError: When ``config.telemetry_extensions`` holds a non-builtin entry.
     :raises ExtensionError: For a malformed, unknown, duplicate or refused spec, a

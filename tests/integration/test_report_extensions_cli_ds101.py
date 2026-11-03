@@ -443,6 +443,118 @@ def test_marker_planted_under_docs_never_shrinks_the_boundary(
     assert scans == []
 
 
+_LOGICAL_CASES = ("default-root", "dotdot-docs", "link-to-link-dir", "link-to-link-file")
+
+
+@pytest.mark.skipif(not hasattr(os, "symlink"), reason="symlinks are not available")
+@pytest.mark.parametrize("case", _LOGICAL_CASES)
+def test_logical_cwd_or_link_chain_never_drops_a_linked_out_checkout(
+    case: str,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+    scans: list[Any],
+    capsys: pytest.CaptureFixture[str],
+    fresh_modules: Any,
+):
+    """
+    [Integration] report extensions cli ds101: verifies $PWD and symlink hops keep a linked-out checkout anchored (M6).
+
+    Scenario:
+        Given a git checkout whose ``docs`` is a symlink to the DS101 case outside it and whose ``src/`` (on sys.path)
+            holds an extension that writes a sentinel on import (auditor fixture w14), and either the cwd being
+            ``<checkout>/docs`` entered through the link (``$PWD`` logical, ``os.getcwd()`` physical) with the root
+            defaulted or given as ``../docs``; or the cwd elsewhere with ``rootlink -> <checkout>/docs`` (or
+            ``filelink -> <checkout>/docs/README.md``) as the root
+        When ``docsentinel scan [<root>] --extension python:<ext>:make --allow-python-extensions`` runs
+        Then it exits 2 naming sys.path before the scan, nothing is on stdout and the extension never ran.
+
+    Boundaries:
+        - Focus: review finding N5 (physical cwd hides the checkout) and L1 (link-to-link root)
+        - Fixtures/params: one root spelling per case
+        - Scope: in-process CLI call
+
+    On failure, first check:
+        - ``cli._origin_spellings`` (``$PWD`` accepted only when it is the same file as ``.``)
+        - ``extensions._link_chain`` and its use in ``extensions._Boundary.of``
+    """
+    checkout = tmp_path_factory.mktemp("checkout")
+    (checkout / ".git").mkdir()
+    linked = load_asset_case("ds101", "dangling_file_link", tmp_path_factory.mktemp("linked") / "docs").root
+    os.symlink(linked, checkout / "docs")
+    sentinel = tmp_path_factory.mktemp("sentinel") / "ran"
+    name = f"ds_cli_logical_ext_{case.replace('-', '_')}"
+    (checkout / "src").mkdir()
+    (checkout / "src" / f"{name}.py").write_text(
+        f"from pathlib import Path\nPath({str(sentinel)!r}).write_text('ran')\n"
+        "class E:\n    name = 'company'\ndef make():\n    return E()\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(checkout / "src"))
+    roots: list[str] = []
+    if case in ("default-root", "dotdot-docs"):
+        logical = checkout / "docs"
+        monkeypatch.chdir(logical)
+        monkeypatch.setenv("PWD", str(logical))
+        assert os.getcwd() == str(linked.resolve())
+        roots = [] if case == "default-root" else ["../docs"]
+    else:
+        elsewhere = tmp_path_factory.mktemp("elsewhere")
+        if case == "link-to-link-dir":
+            os.symlink(checkout / "docs", elsewhere / "rootlink")
+            roots = ["rootlink"]
+        else:
+            os.symlink(checkout / "docs" / "README.md", elsewhere / "filelink")
+            roots = ["filelink"]
+        monkeypatch.chdir(elsewhere)
+        monkeypatch.setenv("PWD", str(elsewhere))
+
+    code = cli.main(["scan", *roots, "--extension", f"python:{name}:make", "--allow-python-extensions"])
+    captured = capsys.readouterr()
+
+    assert code == 2 and captured.out == ""
+    assert "sys.path" in captured.err
+    assert not sentinel.exists()
+    assert name not in sys.modules
+    assert scans == []
+
+
+@pytest.mark.parametrize("pwd", ["relative/pwd", "/does/not/exist/docsentinel-pwd", "OTHER-DIRECTORY"])
+def test_unusable_or_foreign_pwd_is_ignored_without_error(
+    pwd: str,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+    scans: list[Any],
+    capsys: pytest.CaptureFixture[str],
+):
+    """
+    [Integration] report extensions cli ds101: verifies a $PWD that is not the cwd is ignored, never raised (M6, N5).
+
+    Scenario:
+        Given the cwd inside the DS101 case and ``$PWD`` relative, missing, or an existing directory other than the cwd
+        When ``docsentinel scan .`` runs without extensions
+        Then the scan runs normally and exits 1 for the dangling link.
+
+    Boundaries:
+        - Focus: the N5 ``$PWD`` probe fails closed (no extra anchor, no error)
+        - Fixtures/params: one unusable ``$PWD`` per case
+        - Scope: in-process CLI call
+
+    On failure, first check:
+        - ``cli._origin_spellings`` (``os.path.isabs`` and ``os.path.samefile`` guards)
+    """
+    docs = load_asset_case("ds101", "dangling_file_link", tmp_path_factory.mktemp("case") / "docs").root
+    if pwd == "OTHER-DIRECTORY":
+        pwd = str(tmp_path_factory.mktemp("other"))
+    monkeypatch.chdir(docs)
+    monkeypatch.setenv("PWD", pwd)
+
+    code = cli.main(["scan", "."])
+    captured = capsys.readouterr()
+
+    assert code == 1, captured.err
+    assert len(scans) == 1
+
+
 @pytest.mark.parametrize("inserted", ["cwd", "root"])
 def test_factory_putting_the_checkout_on_sys_path_fails_before_the_hook(
     inserted: str,

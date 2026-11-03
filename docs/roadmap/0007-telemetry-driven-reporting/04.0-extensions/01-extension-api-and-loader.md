@@ -165,6 +165,19 @@ must be callable; a missing hook is a no-op (M13).
     `ExtensionError` propagates and is never turned into a filter or render failure.
     F3 (the `check_path` cache keyed on path strings) and F5 (tripwire spellings) are
     follow-ups recorded under the threat model's residual risks.
+  - *Amendment 2026-11-03 (final review of Task 01, N5, L1, I1, I2).* **N5:** a
+    relative root is made absolute against the physical cwd, so after `cd` into an
+    outward-linked `<checkout>/docs` the checkout dropped out; the CLI also anchors
+    `$PWD` and the root joined onto it when `$PWD` is absolute and is the same file
+    as `.` (an unusable or spoofed `$PWD` is ignored and can only widen the
+    boundary). **L1:** `_Boundary.of` follows each root spelling's final-component
+    symlink chain (`os.readlink`, at most 40 hops, fail closed beyond) and anchors
+    every hop; the CLI also passes a file root itself. **I1:** the `origin_roots`
+    cap counts iterated entries (`islice`, never `len()`), and a raising
+    `__fspath__` is an `ExtensionError`. **I2:** library callers pass `root` as the
+    user spelled it (absolute against the logical cwd, never pre-resolved); the
+    library never reads `$PWD`. A launcher that clears `$PWD` is a residual under
+    the threat model's R3.
 - **Builtins (M5).** `builtin:<name>` resolves through a static `dict` in
   `telemetry/builtin/__init__.py` (name -> fixed module/class). The user string is
   never interpolated into an `import_module` argument; an unknown name is refused

@@ -216,6 +216,34 @@ mitigations with an owning task.
         checkout on `sys.path` on one call and import through it on the next; only
         the post-render `sys.modules` check caught it, after the planted module ran.
       - **F4.** See M17: only an exact `KeyboardInterrupt` propagates.
+    - *Amendment 2026-11-03 (final review of Task 01, findings N5, L1, I1, I2):*
+      - **N5.** `os.path.abspath` joins a relative root onto the *physical* cwd
+        (`os.getcwd()`). After `cd <checkout>/docs` with `docs` a symlink out of the
+        checkout, `docsentinel scan` (default root `.`) and `scan ../docs` produced an
+        "unresolved" spelling that was already outside, so the checkout dropped out of
+        the boundary and a planted `<checkout>/src` module on `PYTHONPATH` ran
+        (auditor fixture w14). The logical directory survives only in `$PWD`. The CLI
+        now reads `$PWD` and, only when it is absolute and `os.path.samefile($PWD, .)`
+        holds, adds `$PWD` and `normpath(join($PWD, <root argument>))` (its parent
+        for a file) to `origin_roots`. Extra anchors can only widen the boundary, so a
+        spoofed `$PWD` admits nothing; an unusable `$PWD` (relative, missing, another
+        directory, or an `OSError`) is ignored, never raised. `reporting.py` and
+        `telemetry/` still never read the environment.
+      - **L1.** A root that is a link to a link (`elsewhere/rootlink ->
+        <checkout>/docs -> outside/docs`) anchored neither spelling inside the
+        checkout. `_Boundary.of` now follows the final-component symlink chain of the
+        root and of every `origin_roots` entry with `os.readlink` (at most 40 hops; a
+        longer chain or a loop is a fail-closed `ExtensionError`), anchoring each hop
+        and its marked ancestors. The CLI also passes a file root itself, so a root
+        file that is a link into the checkout is walked too.
+      - **I1.** The 64-entry `origin_roots` cap counts at most 65 iterated entries,
+        never `len()`, so a sequence with a lying `__len__` cannot bypass it; an
+        `__fspath__` that raises is an `ExtensionError`.
+      - **I2 (library).** `reporting.render(root=...)` and `resolve_extensions` cannot
+        know the invoker's logical cwd (they never read `$PWD`): a *relative* `root`
+        is made absolute against the physical cwd. Library callers pass the scan root
+        as the user spelled it, made absolute against the logical cwd when they have
+        one, and never pre-resolved; `origin_roots` takes further spellings.
   - Document: run the console script (not `python -m`), or `python -P`
     (`PYTHONSAFEPATH`); do not set `PYTHONPATH` to the checkout in untrusted-PR jobs.
   - `builtin:<name>` resolves through a **static** `dict` in
@@ -708,6 +736,15 @@ Hand fixes to `python-expert` and the listed tests to `testing-expert`.
     `.venv` lies inside the checkout and the checkout commits files there;
   - the stdlib is not exempt, so running from a cwd that contains the interpreter (for
     example `~` with a uv-managed Python) refuses `python:` extensions.
+  - (Amended 2026-11-03, N5/L1.) the logical cwd is known only through `$PWD`: a
+    launcher that clears or rewrites `$PWD` (`env -i`, some CI step runners, a
+    `subprocess` with a custom `env`) after entering `<checkout>/docs` through an
+    outward symlink still drops the checkout from the boundary for a relative root;
+    passing the root as an absolute path through the checkout closes it. Only the
+    *final* component's symlink chain of a root spelling is walked lexically; a
+    relative link target whose own directory spelling contains `..` across another
+    symlink may anchor a lexically normalized hop instead of the kernel's one (the
+    canonical-directory spelling of each hop is anchored as well).
 - **R4.** pytest and pre-commit run repository code already, so the gate is moot in those
   contexts.
 - **R5.** `domain` labels are asserted by the repository (data integrity of aggregated

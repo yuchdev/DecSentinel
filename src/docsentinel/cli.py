@@ -176,7 +176,7 @@ def _python_extensions_allowed(flag: bool) -> bool:
 
 
 def _report_extensions(
-    specs: list[str], settings: Config, root: Path, *, allow_python: bool, origin_root: Path
+    specs: list[str], settings: Config, root: Path, *, allow_python: bool, origin_roots: tuple[Path, ...]
 ) -> LoadedExtensions:
     """Resolve the report extensions before the template and the scan (M30).
 
@@ -188,10 +188,10 @@ def _report_extensions(
     :param settings: The effective configuration.
     :param root: The resolved scan root directory (refused as a module origin, M6).
     :param allow_python: The gate decision.
-    :param origin_root: The scan root directory as given on the command line,
-        absolute but unresolved; anchored too, so a root that is a symlink out of
-        the checkout cannot drop the checkout from the M6 boundary (amended
-        2026-11-03, F1).
+    :param origin_roots: The scan root as given on the command line, absolute but
+        unresolved, plus its logical spellings (see :func:`_origin_spellings`);
+        anchored too, so a root that is a symlink out of the checkout cannot drop
+        the checkout from the M6 boundary (amended 2026-11-03, F1, N5).
     :returns: The validated registry.
     :raises ConfigError: For a non-builtin ``telemetry_extensions`` entry.
     :raises ExtensionError: For a refused, unknown, duplicate or failing extension.
@@ -202,8 +202,41 @@ def _report_extensions(
         allow_python=allow_python,
         root=root,
         cwd=Path.cwd(),
-        origin_roots=(origin_root,),
+        origin_roots=origin_roots,
     )
+
+
+def _origin_spellings(spelled: str, *, is_file: bool) -> tuple[Path, ...]:
+    """Return the scan-root spellings the M6 boundary anchors besides the resolved root.
+
+    ``os.path.abspath`` joins a relative root onto the *physical* current directory,
+    so after ``cd <checkout>/docs`` with ``docs`` a symlink out of the checkout the
+    unresolved spelling is already outside and the checkout would drop out of the
+    boundary; the logical directory survives only in ``$PWD`` (amended 2026-11-03,
+    N5). ``$PWD`` is therefore used too, but only when it is absolute and names the
+    current directory (``os.path.samefile``): then ``$PWD`` itself and the root
+    joined onto it are added. Extra anchors can only widen the boundary, so a
+    spoofed ``$PWD`` cannot admit anything; an unusable one is ignored, never raised.
+    For a file root the containing directory and the file itself are both given (the
+    file so that a symlinked root file's link chain is walked, L1).
+
+    :param spelled: The root argument as the invoker typed it.
+    :param is_file: Whether the root is a file.
+    :returns: The spellings, deduplicated, physical spelling first.
+    """
+    given = os.path.abspath(spelled)
+    found = [os.path.dirname(given) if is_file else given, given]
+    pwd = os.environ.get("PWD")
+    if pwd and os.path.isabs(pwd):
+        try:
+            same = os.path.samefile(pwd, os.curdir)
+        except (OSError, ValueError):
+            # Fail closed: an unusable $PWD only means fewer extra anchors, never an error.
+            same = False
+        if same:
+            logical = os.path.normpath(os.path.join(pwd, spelled))
+            found.extend((pwd, os.path.dirname(logical) if is_file else logical, logical))
+    return tuple(Path(entry) for entry in dict.fromkeys(found))
 
 
 def _doctor_extension_lines() -> list[str]:
@@ -452,10 +485,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     try:
         target = Path(args.root).resolve()
         directory = target.parent if target.is_file() else target
-        # M6 (F1): the unresolved spelling keeps the checkout in the extension boundary
-        # when the root (or a root file) is a symlink pointing out of it.
-        given = Path(os.path.abspath(args.root))
-        origin_directory = given.parent if target.is_file() else given
+        # M6 (F1, N5, L1): the unresolved and the logical ($PWD) spellings keep the
+        # checkout in the extension boundary when the root, a root file or the cwd is
+        # a symlink pointing out of it.
+        origins = _origin_spellings(args.root, is_file=target.is_file())
         settings = load_config(directory, args.config)
         changes = {}
         if args.profile is not None:
@@ -475,7 +508,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         # M30 order: gate and resolve extensions -> template -> requires check -> scan.
         allow_python = _python_extensions_allowed(args.allow_python_extensions)
         loaded = _report_extensions(
-            args.extensions, settings, directory, allow_python=allow_python, origin_root=origin_directory
+            args.extensions, settings, directory, allow_python=allow_python, origin_roots=origins
         )
         if loaded.builtin_specs != settings.telemetry_extensions:
             settings = replace(settings, telemetry_extensions=loaded.builtin_specs)

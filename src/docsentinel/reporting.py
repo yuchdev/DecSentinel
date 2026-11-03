@@ -115,7 +115,11 @@ def render(
     :param template: A template or template file path; wins over ``format``.
     :param root: The scan root ``report_templates_dir`` is resolved against, and the
         anchor of the ``python:`` origin check; required when ``extensions`` holds a
-        ``python:`` spec.
+        ``python:`` spec. Pass it as the user spelled it, never pre-resolved, and
+        absolute against the logical current directory when the caller knows one: a
+        relative ``root`` is made absolute against the physical ``os.getcwd()`` (this
+        function never reads ``$PWD``), which can hide a checkout entered through an
+        outward symlink (M6, amended 2026-11-03, N5/I2).
     :param strict: Whether warnings are blocking (``--strict``); feeds ``outcome``.
     :param extensions: Extension specs equivalent to ``--extension`` (``builtin:<name>``
         or ``python:<module>:<callable>``), resolved after ``config.telemetry_extensions``;

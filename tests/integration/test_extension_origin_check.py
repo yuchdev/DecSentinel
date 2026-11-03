@@ -16,8 +16,9 @@ import json
 import os
 import sys
 import types
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -724,6 +725,142 @@ def test_origin_roots_must_be_a_sequence_of_paths(origin_roots: object, layout: 
             root=layout["root"],
             cwd=layout["cwd"],
             origin_roots=origin_roots,  # type: ignore[arg-type]
+        )
+
+
+class _LyingSequence(Sequence[str]):
+    """A sequence whose ``__len__`` claims one entry while iteration never ends."""
+
+    def __len__(self) -> int:
+        """Claim a single entry."""
+        return 1
+
+    def __getitem__(self, index: Any) -> str:
+        """Return the same path for every index."""
+        return "/a/path"
+
+    def __iter__(self) -> Iterator[str]:
+        """Yield the same path forever."""
+        return itertools.repeat("/a/path")
+
+
+class _RaisingPath:
+    """An ``os.PathLike`` whose ``__fspath__`` raises."""
+
+    def __fspath__(self) -> str:
+        """Fail the conversion."""
+        raise RuntimeError("no path for you")
+
+
+@pytest.mark.parametrize(
+    ("origin_roots", "message"),
+    [(_LyingSequence(), "too many origin_roots"), ([_RaisingPath()], "must be a sequence of paths")],
+    ids=["lying-len", "raising-fspath"],
+)
+def test_origin_roots_cap_and_fspath_cannot_be_bypassed(origin_roots: object, message: str, layout: dict[str, Path]):
+    """
+    [Integration] extension origin check: verifies a lying __len__ or a raising __fspath__ is a bounded ExtensionError (M6, I1).
+
+    Scenario:
+        Given ``origin_roots`` as a Sequence whose ``__len__`` says 1 but whose iterator never ends, or a list
+            holding a PathLike whose ``__fspath__`` raises RuntimeError
+        When resolve_extensions runs with an empty spec list
+        Then an ExtensionError (never a hang or a RuntimeError) is raised before anything is resolved.
+
+    Boundaries:
+        - Focus: review finding I1 (the 64-entry cap counts iterated entries, not ``len()``)
+        - Fixtures/params: one hostile value per case
+        - Scope: resolve_extensions
+
+    On failure, first check:
+        - ``extensions._origin_paths`` (``islice`` over ``MAX + 1`` entries, ``os.fspath`` in a try)
+    """
+    with pytest.raises(ExtensionError, match=message):
+        resolve_extensions(
+            (),
+            config=Config(),
+            allow_python=True,
+            root=layout["root"],
+            cwd=layout["cwd"],
+            origin_roots=origin_roots,  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.skipif(not hasattr(os, "symlink"), reason="symlinks are not available")
+def test_link_to_link_root_keeps_the_intermediate_checkout_in_the_boundary(
+    layout: dict[str, Path], tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+):
+    """
+    [Integration] extension origin check: verifies every hop of a symlinked root is anchored (M6, L1).
+
+    Scenario:
+        Given a git checkout whose ``docs`` is a symlink to a directory outside it, ``<checkout>/src`` on sys.path
+            holding an extension that writes a sentinel on import, and ``<elsewhere>/rootlink -> <checkout>/docs``
+        When the extension is resolved with ``origin_roots=(<elsewhere>/rootlink,)`` and the resolved docs as root
+        Then it is refused naming sys.path and the planted extension never ran.
+
+    Boundaries:
+        - Focus: review finding L1 (neither the given nor the canonical spelling lies in the checkout)
+        - Fixtures/params: none
+        - Scope: resolve_extensions
+
+    On failure, first check:
+        - ``extensions._link_chain`` and its use in ``extensions._Boundary.of``
+    """
+    checkout = layout["root"]
+    (checkout / ".git").mkdir()
+    real_docs = tmp_path_factory.mktemp("linked") / "docs"
+    real_docs.mkdir()
+    os.symlink(real_docs, checkout / "docs")
+    elsewhere = tmp_path_factory.mktemp("elsewhere")
+    os.symlink(checkout / "docs", elsewhere / "rootlink")
+    name = _unique("company_ext")
+    sentinel = layout["outside"] / f"{name}.sentinel"
+    _plant(checkout / "src", f"{name}.py", sentinel, "def make():\n    return None\n")
+    monkeypatch.syspath_prepend(str(checkout / "src"))
+
+    with pytest.raises(ExtensionError, match=r"sys\.path"):
+        resolve_extensions(
+            (f"python:{name}:make",),
+            config=Config(),
+            allow_python=True,
+            root=real_docs.resolve(),
+            cwd=layout["cwd"],
+            origin_roots=(elsewhere / "rootlink",),
+        )
+    assert not sentinel.exists()
+
+
+@pytest.mark.skipif(not hasattr(os, "symlink"), reason="symlinks are not available")
+def test_symlink_loop_as_origin_root_fails_closed(layout: dict[str, Path], tmp_path_factory: pytest.TempPathFactory):
+    """
+    [Integration] extension origin check: verifies a symlink loop as a root spelling is refused, not walked forever (M6, L1).
+
+    Scenario:
+        Given ``<dir>/a -> <dir>/b`` and ``<dir>/b -> <dir>/a``
+        When resolve_extensions runs with ``origin_roots=(<dir>/a,)`` and an empty spec list
+        Then an ExtensionError naming the implausibly long symlink chain is raised.
+
+    Boundaries:
+        - Focus: the hop bound of the L1 link-chain walk (fail closed rather than stop early)
+        - Fixtures/params: none
+        - Scope: resolve_extensions
+
+    On failure, first check:
+        - ``extensions._link_chain`` (``_MAX_LINK_HOPS``)
+    """
+    looped = tmp_path_factory.mktemp("loop")
+    os.symlink(looped / "b", looped / "a")
+    os.symlink(looped / "a", looped / "b")
+
+    with pytest.raises(ExtensionError, match="symlink chain"):
+        resolve_extensions(
+            ("python:ds_m6_never_imported:make",),
+            config=Config(),
+            allow_python=True,
+            root=layout["root"],
+            cwd=layout["cwd"],
+            origin_roots=(looped / "a",),
         )
 
 
