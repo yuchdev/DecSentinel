@@ -192,33 +192,68 @@ def _derived_type(finding: Finding) -> Optional[str]:
     """
     if finding.type is not None:
         return finding.type
-    title = rule_title(finding.rule)
+    return _type_from_title(rule_title(finding.rule))
+
+
+def _type_from_title(title: Optional[str]) -> Optional[str]:
+    """Return a rule title with a lower-cased first letter, the derived ``type``.
+
+    :param title: The rule title, or ``None`` for an unknown rule.
+    :returns: The derived type, or ``None``.
+    """
     if title is None:
         return None
     return title[0].lower() + title[1:]
 
 
-def _problem(finding: Finding, config: Config, *, strict: bool) -> dict[str, JsonValue]:
+#: Per-build cache of the path-independent labels of a ``(rule, severity)`` pair:
+#: ``(rule_title, derived type for an unset Finding.type, fault_class, tier, outcome)``.
+_Labels = tuple[Optional[str], Optional[str], str, str, Optional[str]]
+
+
+def _problem(
+    finding: Finding, config: Config, *, strict: bool, labels: Optional[dict[tuple[str, str], _Labels]] = None
+) -> dict[str, JsonValue]:
     """Build one problem entry of the context.
+
+    ``fault_class``, ``tier`` and ``outcome`` come from
+    :func:`~docsentinel.telemetry.classify.classify`, which derives them from the
+    rule, the severity, ``strict`` and the configuration only -- never from the
+    path -- so one call per distinct ``(rule, severity)`` serves a whole build.
 
     :param finding: The reported finding.
     :param config: The effective scan configuration.
     :param strict: Whether warnings are blocking.
+    :param labels: The build's ``(rule, severity)`` label cache, filled on a miss;
+        ``None`` classifies this finding alone.
     :returns: The JSON-shaped problem mapping.
     """
-    labels = classify(finding, config, strict=strict)
+    key = (finding.rule, finding.severity)
+    entry = labels.get(key) if labels is not None else None
+    if entry is None:
+        classification = classify(finding, config, strict=strict)
+        title = rule_title(finding.rule)
+        entry = (
+            title,
+            _type_from_title(title),
+            classification.fault_class,
+            classification.tier,
+            classification.outcome,
+        )
+        if labels is not None:
+            labels[key] = entry
     return {
         "rule": finding.rule,
-        "rule_title": rule_title(finding.rule),
-        "type": _derived_type(finding),
+        "rule_title": entry[0],
+        "type": finding.type if finding.type is not None else entry[1],
         "message": finding.message,
         "value": finding.value,
         "severity": finding.severity,
         "line": finding.line,
         "column": finding.column,
-        "fault_class": labels.fault_class,
-        "tier": labels.tier,
-        "outcome": labels.outcome,
+        "fault_class": entry[2],
+        "tier": entry[3],
+        "outcome": entry[4],
     }
 
 
@@ -291,8 +326,9 @@ class ReportModel:
                 documents[document.path] = ReportModel._document(document.path, document.bytes, domains)
         flat: list[dict[str, JsonValue]] = []
         flat_for: dict[int, dict[str, JsonValue]] = {}
+        labels: dict[tuple[str, str], _Labels] = {}
         for finding in result.findings:
-            problem = _problem(finding, config, strict=strict)
+            problem = _problem(finding, config, strict=strict, labels=labels)
             target = documents.get(finding.path)
             if target is None:
                 target = documents[finding.path] = ReportModel._document(finding.path, None, domains)

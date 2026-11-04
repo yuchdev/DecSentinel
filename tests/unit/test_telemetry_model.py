@@ -651,3 +651,46 @@ def test_inventory_repeats_the_scan_documents_exactly():
     assert [entry["path"] for entry in context["documents"]][-1] == "src/calc.py"
     assert CONTEXT_SCHEMA["inventory"].fields["path"].trust == UNTRUSTED
     assert CONTEXT_SCHEMA["inventory"].fields["bytes"].trust == TRUSTED
+
+
+@pytest.mark.parametrize("strict", [False, True], ids=["default", "strict"])
+def test_build_labels_every_finding_like_classify(strict: bool):
+    """
+    [Unit] report model: verifies per-(rule, severity) label reuse gives every problem its own classify labels.
+
+    Scenario:
+        Given findings repeating rules with mixed severities, one with and one without a ``type``
+        When the model is built (with and without ``strict``)
+        Then each problem's fault_class/tier/outcome equal ``classify`` of that finding, and its ``type``
+            is its own value or the rule-title fallback.
+
+    Boundaries:
+        - Focus: regression guard for the label cache in ``ReportModel.build`` (severity is part of the key)
+        - Fixtures/params: strict off/on
+        - Scope: in-memory model building
+
+    On failure, first check:
+        - the ``(rule, severity)`` key of ``_problem`` in ``telemetry/model.py``
+    """
+    findings = (
+        _DS101,
+        Finding(rule="DS101", path="c.md", message="dangling link -> y.md", severity="warning", line=1),
+        _DS102,
+        Finding(rule="DS102", path="a.md", message="stray HTML comment", severity="error", line=7, type="custom"),
+        _DS117,
+    )
+    config = Config()
+
+    problems = ReportModel.build(_result(findings), config, strict=strict)["findings"]
+
+    for finding, problem in zip(findings, problems, strict=True):
+        labels = classify(finding, config, strict=strict)
+        assert (problem["fault_class"], problem["tier"], problem["outcome"]) == (
+            labels.fault_class,
+            labels.tier,
+            labels.outcome,
+        )
+        title = rule_title(finding.rule)
+        assert problem["rule_title"] == title
+        assert problem["type"] == (finding.type if finding.type is not None else title[0].lower() + title[1:])
+    assert [problem["outcome"] for problem in problems[:2]] == ["rejected", "rejected" if strict else "advisory"]
