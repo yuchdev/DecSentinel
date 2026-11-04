@@ -107,6 +107,11 @@ MAX_TELEMETRY_EXTENSIONS = 32
 MAX_TELEMETRY_DOMAINS = 256
 MAX_DOMAIN_GLOB_CHARS = 256
 MAX_DOMAIN_GLOB_SEGMENTS = 32
+#: Total characters of all ``telemetry_domains`` globs together (closure threat model
+#: 2026-11-04 follow-up (a)). The matcher's work per path is bounded by this total
+#: times the path length, so it caps the per-document cost of a hostile table
+#: (without it: 256 x 256 characters).
+MAX_DOMAIN_GLOBS_TOTAL_CHARS = 4096
 
 #: A domain label (owner decision D-D, the Milestone 0006 vocabulary). ASCII only:
 #: ``[a-z]`` in a ``str`` pattern never matches a non-ASCII letter.
@@ -444,16 +449,20 @@ def validate_telemetry_domains(value: object) -> tuple[tuple[str, str], ...]:
         injected :class:`Config`.
     :returns: ``(glob, domain)`` pairs, in configured order.
     :raises ConfigError: For a non-array, more than :data:`MAX_TELEMETRY_DOMAINS`
-        entries, or any invalid entry.
+        entries, any invalid entry, or globs longer than
+        :data:`MAX_DOMAIN_GLOBS_TOTAL_CHARS` characters in total.
     """
     if type(value) is not list and type(value) is not tuple:
         raise ConfigError("telemetry_domains must be an array of tables with glob and domain")
     if len(value) > MAX_TELEMETRY_DOMAINS:  # type: ignore[arg-type]
         raise ConfigError(f"telemetry_domains holds more than {MAX_TELEMETRY_DOMAINS} entries")
-    return tuple(
+    pairs = tuple(
         _domain_entry(entry, f"telemetry_domains[{position}]")
         for position, entry in enumerate(value)  # type: ignore[arg-type]
     )
+    if sum(len(glob) for glob, _ in pairs) > MAX_DOMAIN_GLOBS_TOTAL_CHARS:
+        raise ConfigError(f"telemetry_domains globs hold more than {MAX_DOMAIN_GLOBS_TOTAL_CHARS} characters in total")
+    return pairs
 
 
 def validate_telemetry_extensions(value: object) -> tuple[str, ...]:

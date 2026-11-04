@@ -14,6 +14,7 @@ import pytest
 from docsentinel.config import (
     MAX_DOMAIN_GLOB_CHARS,
     MAX_DOMAIN_GLOB_SEGMENTS,
+    MAX_DOMAIN_GLOBS_TOTAL_CHARS,
     MAX_TELEMETRY_DOMAINS,
     Config,
     ConfigError,
@@ -272,6 +273,93 @@ def test_boundary_values_are_accepted():
 
     assert len(table) == MAX_TELEMETRY_DOMAINS
     assert table[0] == (long_glob, "a" + "b" * 63) and table[1] == (deep_glob, "x-y_z9")
+
+
+def _star_glob(length: int) -> str:
+    """Return a glob of exactly ``length`` characters: backtracking-hostile ``*aaa...b/**`` when it fits."""
+    return "*" + "a" * (length - 5) + "b/**" if length >= 5 else "a" * length
+
+
+def _budget_table(total: int) -> list[dict[str, str]]:
+    """Return a table of max-length hostile globs whose characters add up to exactly ``total``."""
+    full, rest = divmod(total, MAX_DOMAIN_GLOB_CHARS)
+    entries = [{"glob": _star_glob(MAX_DOMAIN_GLOB_CHARS), "domain": "docs"} for _ in range(full)]
+    if rest:
+        entries.append({"glob": _star_glob(rest), "domain": "docs"})
+    return entries
+
+
+def test_total_glob_characters_are_budgeted():
+    """
+    [Unit] telemetry domains: verifies the whole table's glob characters are capped (closure follow-up (a)).
+
+    Scenario:
+        Given tables of max-length star globs adding up to exactly the budget, and to one character more
+        When each table is validated, directly and as an injected Config through ``domain_for``
+        Then the table at the budget is accepted and the one above it is a ConfigError naming the budget,
+            raised before any matching.
+
+    Boundaries:
+        - Focus: the total-character budget on top of the per-glob M22 bounds; off-by-one at the edge
+        - Fixtures/params: none
+        - Scope: ``config.validate_telemetry_domains`` and ``domain.domain_for``
+
+    On failure, first check:
+        - the sum check at the end of ``config.validate_telemetry_domains`` (``>`` not ``>=``)
+    """
+    at_budget = _budget_table(MAX_DOMAIN_GLOBS_TOTAL_CHARS)
+    over_budget = _budget_table(MAX_DOMAIN_GLOBS_TOTAL_CHARS + 1)
+    message = f"more than {MAX_DOMAIN_GLOBS_TOTAL_CHARS} characters in total"
+
+    accepted = validate_telemetry_domains(at_budget)
+
+    assert sum(len(glob) for glob, _ in accepted) == MAX_DOMAIN_GLOBS_TOTAL_CHARS
+    assert sum(len(entry["glob"]) for entry in over_budget) == MAX_DOMAIN_GLOBS_TOTAL_CHARS + 1
+    assert len(over_budget) <= MAX_TELEMETRY_DOMAINS
+    assert all(len(entry["glob"]) <= MAX_DOMAIN_GLOB_CHARS for entry in over_budget)
+    with pytest.raises(ConfigError, match=message):
+        validate_telemetry_domains(over_budget)
+    injected = _config(*((entry["glob"], entry["domain"]) for entry in over_budget))
+    with pytest.raises(ConfigError, match=message):
+        domain_for("docs/a.md", injected)
+
+
+def test_worst_case_table_at_the_budget_bounds_matcher_work(monkeypatch: pytest.MonkeyPatch):
+    """
+    [Unit] telemetry domains: verifies matcher work per path is at most budget x path characters (follow-up (a)).
+
+    Scenario:
+        Given a table of backtracking-hostile ``*aaa...b/**`` globs filling the whole character budget, and a
+            4000-character path of 200-character ``a`` segments (the matcher's worst case, no glob matches)
+        When the domain of that path is looked up
+        Then it falls back to ``docs`` and the summed ``len(glob segment) x len(path segment)`` cost of every
+            segment comparison stays within ``MAX_DOMAIN_GLOBS_TOTAL_CHARS x len(path)``.
+
+    Boundaries:
+        - Focus: the budget, not wall-clock, bounds a scanned repository's table (deterministic step count)
+        - Fixtures/params: the segment matcher wrapped with a cost counter
+        - Scope: ``domain.domain_for`` over a validated table
+
+    On failure, first check:
+        - whether ``glob_matches`` started calling ``segment_matches`` more than once per segment pair
+        - whether the budget constant was raised without re-checking this bound
+    """
+    entries = validate_telemetry_domains(_budget_table(MAX_DOMAIN_GLOBS_TOTAL_CHARS))
+    config = _config(*entries)
+    path = "/".join(["a" * 200] * 20)
+    cost: list[int] = []
+    real = domain.segment_matches
+
+    def counting(segment: str, text: str) -> bool:
+        """Record the documented worst-case cost of one comparison, then run the real one."""
+        cost.append(len(segment) * len(text))
+        return real(segment, text)
+
+    monkeypatch.setattr(domain, "segment_matches", counting)
+
+    assert domain_for(path, config) == DEFAULT_DOMAIN
+    assert cost, "the hostile table must actually exercise the segment matcher"
+    assert sum(cost) <= MAX_DOMAIN_GLOBS_TOTAL_CHARS * len(path)
 
 
 @pytest.mark.parametrize("form", ["standalone", "pyproject"])
