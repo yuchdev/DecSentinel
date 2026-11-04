@@ -20,12 +20,16 @@ import pytest
 
 from docsentinel import cli
 
+#: Hostile code points, spelled with ``chr`` so this source file itself stays plain ASCII.
+ESC, BEL, DEL, CSI_C1 = chr(0x1B), chr(0x07), chr(0x7F), chr(0x9B)
+RLO, ZWSP, LRI, LSEP = chr(0x202E), chr(0x200B), chr(0x2066), chr(0x2028)
+
 #: Link target of the DS101 finding: RLO, ZWSP and LRI inside an otherwise ordinary path.
-_BIDI_TARGET = "./y‮bidi​z⁦.md"
+_BIDI_TARGET = "./y" + RLO + "bidi" + ZWSP + "z" + LRI + ".md"
 #: Code-span path of the DS103 finding: an OSC title sequence (ESC ... BEL), RLO, C1 CSI and DEL.
-_CONTROL_PATH = "docs/z\x1b]0;t\x07‮\x9b\x7f.md"
+_CONTROL_PATH = "docs/z" + ESC + "]0;t" + BEL + RLO + CSI_C1 + DEL + ".md"
 #: Pending reason injected after the scan: clear-screen, CR/LF line forgery and a fake annotation.
-_HOSTILE_PENDING = "pend\x1b[2J\r\n::error file=x::forged ‮\x9b"
+_HOSTILE_PENDING = "pend" + ESC + "[2J\r\n::error file=x::forged" + LSEP + RLO + CSI_C1
 
 _DOCUMENT = f"# Title\n\n[b]({_BIDI_TARGET})\n\nSee `{_CONTROL_PATH}` here.\n"
 

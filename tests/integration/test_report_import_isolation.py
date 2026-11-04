@@ -53,7 +53,7 @@ _PROBE = textwrap.dedent(
 )
 
 
-def _layout(base: Path) -> None:
+def _layout(base: Path):
     """Write the repository (builtin extensions on, one dangling link) and the planted module."""
     site = base / "site"
     site.mkdir()
@@ -82,7 +82,7 @@ def _probe(base: Path, mode: str) -> dict[str, object]:
     return json.loads(completed.stdout)
 
 
-def _assert_isolated(report: dict[str, object]) -> None:
+def _assert_isolated(report: dict[str, object]):
     """Assert the probe rendered every template and loaded nothing foreign."""
     codes = report["codes"]
     assert isinstance(codes, dict) and sorted(codes) == sorted(packaged_template_names())
