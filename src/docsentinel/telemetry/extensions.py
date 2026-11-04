@@ -951,8 +951,9 @@ def _origin_paths(origin_roots: object) -> tuple[Path, ...]:
     :param origin_roots: A sequence of ``str``/``os.PathLike`` paths (not one path).
     :returns: Absolute paths, lexically normalized and never resolved, so a symlink
         the invoker named stays the spelling that is anchored.
-    :raises ExtensionError: For a single path, a non-sequence, too many entries or an
-        entry that is not a path (including one whose iteration or ``__fspath__``
+    :raises ExtensionError: For a single path, a non-sequence, too many entries, an
+        entry holding a NUL character, or an entry that is not a path (including one
+        whose iteration or ``__fspath__``
         raises anything but an exact ``KeyboardInterrupt``, as everywhere here). The
         cap is enforced on at most ``MAX + 1`` iterated entries, never on
         ``len()``, so a sequence whose ``__len__`` lies cannot bypass it (I1).
@@ -979,6 +980,10 @@ def _origin_paths(origin_roots: object) -> tuple[Path, ...]:
             raise ExtensionError("origin_roots must be a sequence of paths") from None
         if not isinstance(text, str) or not text:
             raise ExtensionError("origin_roots must be a sequence of paths")
+        if "\0" in text:
+            # os.lstat/realpath raise ValueError for an embedded NUL; refuse it here so
+            # the error contract (ExtensionError only) holds for library callers.
+            raise ExtensionError("origin_roots entry holds a NUL character")
         found.append(Path(os.path.abspath(text)))
     return tuple(found)
 

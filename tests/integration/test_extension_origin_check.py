@@ -754,18 +754,24 @@ class _RaisingPath:
 
 @pytest.mark.parametrize(
     ("origin_roots", "message"),
-    [(_LyingSequence(), "too many origin_roots"), ([_RaisingPath()], "must be a sequence of paths")],
-    ids=["lying-len", "raising-fspath"],
+    [
+        (_LyingSequence(), "too many origin_roots"),
+        ([_RaisingPath()], "must be a sequence of paths"),
+        (["/tmp/a\0b"], "NUL character"),
+        ([Path("/tmp/a\0b")], "NUL character"),
+    ],
+    ids=["lying-len", "raising-fspath", "nul-str", "nul-path"],
 )
 def test_origin_roots_cap_and_fspath_cannot_be_bypassed(origin_roots: object, message: str, layout: dict[str, Path]):
     """
     [Integration] extension origin check: verifies a lying __len__ or a raising __fspath__ is a bounded ExtensionError (M6, I1).
 
     Scenario:
-        Given ``origin_roots`` as a Sequence whose ``__len__`` says 1 but whose iterator never ends, or a list
-            holding a PathLike whose ``__fspath__`` raises RuntimeError
+        Given ``origin_roots`` as a Sequence whose ``__len__`` says 1 but whose iterator never ends, a list
+            holding a PathLike whose ``__fspath__`` raises RuntimeError, or a ``str``/``Path`` entry with a NUL
         When resolve_extensions runs with an empty spec list
-        Then an ExtensionError (never a hang or a RuntimeError) is raised before anything is resolved.
+        Then an ExtensionError (never a hang, a RuntimeError or the ValueError ``os.lstat`` raises for a NUL)
+            is raised before anything is resolved.
 
     Boundaries:
         - Focus: review finding I1 (the 64-entry cap counts iterated entries, not ``len()``)
@@ -784,6 +790,42 @@ def test_origin_roots_cap_and_fspath_cannot_be_bypassed(origin_roots: object, me
             cwd=layout["cwd"],
             origin_roots=origin_roots,  # type: ignore[arg-type]
         )
+
+
+def test_nul_origin_root_is_an_extension_error_before_any_import(layout: dict[str, Path]):
+    """
+    [Integration] extension origin check: verifies a NUL origin_roots entry on the library path is an ExtensionError.
+
+    Scenario:
+        Given a planted extension outside root and cwd that writes a sentinel on import, and an
+            ``origin_roots`` entry holding a NUL character
+        When ``load_python_target`` runs with the gate open
+        Then an ExtensionError naming the NUL (not a ValueError from ``os.lstat``) is raised,
+            and the planted module never ran.
+
+    Boundaries:
+        - Focus: closure threat model follow-up (c): the library error contract is ExtensionError only
+        - Fixtures/params: one planted module in ``outside``
+        - Scope: load_python_target
+
+    On failure, first check:
+        - the NUL check in ``extensions._origin_paths``
+    """
+    name = _unique("nul")
+    sentinel = layout["outside"] / f"{name}.ran"
+    _plant(layout["outside"], f"{name}.py", sentinel, "def make():\n    return None\n")
+
+    with pytest.raises(ExtensionError, match="NUL character"):
+        load_python_target(
+            f"python:{name}:make",
+            allow_python=True,
+            root=layout["root"],
+            cwd=layout["cwd"],
+            origin_roots=(str(layout["root"]) + "\0x",),
+        )
+
+    assert not sentinel.exists()
+    assert name not in sys.modules
 
 
 @pytest.mark.skipif(not hasattr(os, "symlink"), reason="symlinks are not available")
