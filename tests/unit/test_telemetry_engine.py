@@ -1718,3 +1718,98 @@ def test_renderer_modules_import_only_stdlib_and_telemetry_siblings(module: str)
     assert all(name.split(".")[0] in sys.stdlib_module_names for name in imported - local), imported
     if module == "filters.py":
         assert not local
+
+
+def _cyclic() -> list[Any]:
+    """Return a list that contains itself."""
+    loop: list[Any] = []
+    loop.append(loop)
+    return loop
+
+
+@pytest.mark.parametrize(
+    ("members", "message"),
+    [
+        pytest.param({"a": object(), "b": "__cycle__"}, "reference cycle", id="cycle-last"),
+        pytest.param({"a": "__cycle__", "b": object()}, "not JSON data", id="object-last"),
+    ],
+)
+def test_context_with_several_defects_reports_the_last_member_first(members: dict[str, Any], message: str):
+    """
+    [Unit] engine: verifies the context check keeps its last-member-first depth-first order.
+
+    Scenario:
+        Given a context object holding both a reference cycle and a non-JSON object, in either order
+        When any template is rendered
+        Then the defect of the later member is the one reported.
+
+    Boundaries:
+        - Focus: regression guard: the faster iterator-frame walk must report the same defect as the
+          former push-every-member walk
+        - Fixtures/params: both member orders
+        - Scope: render_template, ``_check_context``
+
+    On failure, first check:
+        - the ``reversed(...)`` member order in ``engine._check_context``
+    """
+    extra = {key: _cyclic() if value == "__cycle__" else value for key, value in members.items()}
+    with pytest.raises(TemplateError, match=message):
+        render_template(_text(_line("x", [])), _context(extra=extra))
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        pytest.param({"rule_counts": {"DS101": float("nan")}}, id="nan-in-scalar-dict"),
+        pytest.param({"pending": [type("Tagged", (str,), {})("p")]}, id="str-subclass-value"),
+        pytest.param({"severity_counts": {type("Key", (str,), {})("error"): 1}}, id="str-subclass-key"),
+        pytest.param({"documents": [{"path": "a.md", "problems": [{"line": 1.0, "x": object()}]}]}, id="nested"),
+    ],
+)
+def test_context_check_rejects_inexact_types_in_scalar_only_containers(bad: dict[str, Any]):
+    """
+    [Unit] engine: verifies a container of scalars is checked as strictly as a mixed one (M14).
+
+    Scenario:
+        Given a NaN in a dict of numbers, a ``str`` subclass value or key, or a non-JSON value next to a
+            float deep inside the document tree
+        When any template is rendered
+        Then ``TemplateError`` is raised.
+
+    Boundaries:
+        - Focus: invalid input on the type-set short cut that finishes all-plain containers in one pass
+        - Fixtures/params: one case per short-cut branch
+        - Scope: render_template, ``_check_context``
+
+    On failure, first check:
+        - ``_PLAIN_TYPES``/``_TREE_TYPES``/``_KEY_TYPES`` in ``engine.py``
+    """
+    with pytest.raises(TemplateError, match="not JSON data|non-string object key"):
+        render_template(_text(_line("x", [])), _context(**bad))
+
+
+def test_context_check_accepts_finite_floats_and_shared_scalar_containers():
+    """
+    [Unit] engine: verifies finite floats and a scalar-only dict shared by two parents pass the check.
+
+    Scenario:
+        Given a context whose documents all share one ``severity_counts`` dict and that holds a float
+        When a json template embedding both renders
+        Then it renders normally.
+
+    Boundaries:
+        - Focus: normal case of the short cut (shared sub-trees are checked once, never a false cycle)
+        - Fixtures/params: inline context
+        - Scope: render_template, ``_check_context``
+
+    On failure, first check:
+        - the ``done`` bookkeeping of scalar-only containers in ``engine._check_context``
+    """
+    context = _context(ratio=0.5)
+    shared = {"error": 1}
+    for document in context["documents"]:
+        document["severity_counts"] = shared
+    template = _json({"$for": "documents", "as": "doc", "each": {"$var": "doc.severity_counts"}})
+
+    assert len(context["documents"]) >= 2
+    assert json.loads(render_template(template, context)) == [shared] * len(context["documents"])

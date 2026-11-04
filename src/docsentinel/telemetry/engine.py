@@ -160,6 +160,13 @@ _WORST_EXPANSION: Final[int] = 24
 #: Serialized pieces collected before they are joined into one batch (R7).
 _FLUSH_PIECES: Final[int] = 1024
 
+#: Exact member types :func:`_check_context` accepts without a further check.
+_PLAIN_TYPES: Final[frozenset[type]] = frozenset({str, int, bool, type(None)})
+#: Plain member types plus the containers :func:`_check_context` descends into.
+_TREE_TYPES: Final[frozenset[type]] = _PLAIN_TYPES | {dict, list}
+#: The only accepted object key type.
+_KEY_TYPES: Final[frozenset[type]] = frozenset({str})
+
 #: Maximum characters of a variable name echoed in an error.
 _MAX_NAME_ECHO = 80
 
@@ -193,10 +200,11 @@ def _echo_name(ref: VarRef) -> str:
 def _check_context(context: object):
     """Reject a context that is not a JSON-shaped tree (M14).
 
-    Walks iteratively (depth-first with explicit leave markers), so depth cannot
-    overflow the stack. A container reached twice through different parents (shared
-    sub-trees such as ``documents_with_problems``) is checked once; a container met
-    again while it is still on the current path is a cycle and is rejected (R3).
+    Walks iteratively (depth-first with one iterator frame per open container), so
+    depth cannot overflow the stack. A container reached twice through different
+    parents (shared sub-trees such as ``documents_with_problems``) is checked once; a
+    container met again while it is still on the current path is a cycle and is
+    rejected (R3).
 
     :param context: The render context.
     :raises TemplateError: When the root is not a ``dict``, or any node is not an
@@ -208,35 +216,62 @@ def _check_context(context: object):
         raise TemplateError("the render context must be a JSON object")
     done: set[int] = set()
     on_path: set[int] = set()
-    stack: list[tuple[object, bool]] = [(context, False)]
-    while stack:
-        value, leaving = stack.pop()
-        if leaving:
-            on_path.discard(id(value))
-            done.add(id(value))
-            continue
-        kind = type(value)
-        if kind is dict or kind is list:
-            marker = id(value)
-            if marker in on_path:
-                raise TemplateError("the render context holds a reference cycle")
-            if marker in done:
-                continue
-            on_path.add(marker)
-            stack.append((value, True))
-            if kind is dict:
-                for key, item in value.items():
-                    if type(key) is not str:
-                        raise TemplateError("the render context has a non-string object key")
-                    stack.append((item, False))
-            else:
-                stack.extend((item, False) for item in value)
-        elif value is None or kind in (str, int, bool):
-            continue
-        elif kind is float and math.isfinite(value):
-            continue
+    # Members are visited last-to-first, the depth-first order of the former
+    # push-every-member walk, so a context with several defects reports the same one
+    # first. The exact member types of a container are collected in one C-level pass:
+    # a container of plain scalars only is finished without a per-member loop, one
+    # that adds only dicts/lists iterates just those, and any other container (a
+    # float to check for finiteness, or a non-JSON value) is walked member by member.
+    stack: list[tuple[int, Any]] = []
+
+    def enter(container: Union[dict, list]) -> bool:
+        """Check ``container``'s keys and plain members; open a frame if it has more.
+
+        :param container: An exact ``dict`` or ``list`` not yet checked.
+        :returns: Whether a frame was opened (``False``: fully checked already).
+        """
+        if type(container) is dict:
+            if not set(map(type, container)) <= _KEY_TYPES:
+                raise TemplateError("the render context has a non-string object key")
+            values: Any = container.values()
         else:
+            values = container
+        kinds = set(map(type, values))
+        marker = id(container)
+        if kinds <= _PLAIN_TYPES:
+            done.add(marker)
+            return False
+        if kinds <= _TREE_TYPES:
+            members: Any = [value for value in reversed(values) if type(value) is dict or type(value) is list]
+        else:
+            members = reversed(values)
+        on_path.add(marker)
+        stack.append((marker, iter(members)))
+        return True
+
+    enter(context)
+    while stack:
+        marker, members = stack[-1]
+        for value in members:
+            kind = type(value)
+            if kind is str or kind is int or kind is bool or value is None:
+                continue
+            if kind is dict or kind is list:
+                child = id(value)
+                if child in on_path:
+                    raise TemplateError("the render context holds a reference cycle")
+                if child in done:
+                    continue
+                if enter(value):
+                    break
+                continue
+            if kind is float and math.isfinite(value):
+                continue
             raise TemplateError("the render context holds a value that is not JSON data")
+        else:
+            stack.pop()
+            on_path.discard(marker)
+            done.add(marker)
 
 
 def _thaw(value: Any) -> JsonValue:
@@ -268,6 +303,11 @@ def _equal(left: object, right: object) -> bool:
     :param right: The template operand.
     :returns: ``True`` when they are equal JSON values.
     """
+    if left is None or right is None:
+        # Same result as the general rule below: only null equals null.
+        return left is right
+    if type(left) is str:
+        return type(right) is str and left == right
     if isinstance(left, bool) or isinstance(right, bool):
         return type(left) is type(right) and left == right
     if _is_number(left) and _is_number(right):
@@ -526,11 +566,21 @@ class _JsonStream:
             if 2 * len(value) > bound or _size(value, bound, self._memo) > bound:
                 return None
             return json.dumps(value, ensure_ascii=True, sort_keys=self._sort_keys)
-        children = value.values() if type(value) is dict else value
-        if any(isinstance(child, (dict, list, tuple)) for child in children):
-            return None
+        # One pass for both refusals: any nested container, or a _size lower bound
+        # (brackets, commas, keys with quotes and ": ", every scalar) past ``bound``.
+        total = 2 + len(value)
+        if type(value) is dict:
+            for key, child in value.items():
+                if isinstance(child, (dict, list, tuple)):
+                    return None
+                total += len(key) + 3 + (len(child) + 2 if isinstance(child, str) else 1)
+        else:
+            for child in value:
+                if isinstance(child, (dict, list, tuple)):
+                    return None
+                total += len(child) + 2 if isinstance(child, str) else 1
         inner = self._pad(level + 1)
-        if len(value) * (len(inner) + 1) > _FAST_CHUNK_CHARS or _size(value, bound, self._memo) > bound:
+        if len(value) * (len(inner) + 1) > _FAST_CHUNK_CHARS or total > bound:
             return None
         body = json.dumps(value, ensure_ascii=True, sort_keys=self._sort_keys, separators=("," + inner, ": "))
         return body[0] + inner + body[1:-1] + self._pad(level) + body[-1]
@@ -739,19 +789,25 @@ class _Renderer:
             if not ref.filters or ref.filters[0].name != "default":
                 raise TemplateError(f"variable {_echo_name(ref)} is not present in the render context")
             value = None
-        self._budget.step()
+        budget = self._budget
+        budget.step()
         for call in ref.filters:
-            self._budget.step()
+            budget.step()
+            name = call.name
             try:
-                if call.name.startswith(EXT_FILTER_PREFIX):
-                    value = self._extension_filter(call.name, value, call.args)
+                if name.startswith(EXT_FILTER_PREFIX):
+                    value = self._extension_filter(name, value, call.args)
                 else:
-                    self._budget.reserve(self._estimate(call.name, value, call.args))
-                    value = apply_filter(call.name, value, call.args)
+                    if name == JSON_FILTER or name == "join":
+                        # Only json/join can materialize past their input: size the result
+                        # before it is built (R1). For every other filter the estimate is 0
+                        # and reserve(0) cannot fire, so it is skipped.
+                        budget.reserve(self._estimate(name, value, call.args))
+                    value = apply_filter(name, value, call.args)
             except TemplateError as exc:
                 raise TemplateError(f"variable {_echo_name(ref)}: {exc}") from None
             if isinstance(value, str):
-                self._budget.build(len(value))
+                budget.build(len(value))
         return value
 
     def _extension_filter(self, name: str, value: JsonValue, args: tuple[str, ...]) -> JsonValue:
@@ -783,16 +839,18 @@ class _Renderer:
             re-scanned for ``{...}``.
         """
         pieces: list[str] = []
+        charge = self._budget.charge
         for part in text.parts:
             if isinstance(part, str):
                 piece = part
             else:
-                value = self._value(part)
-                try:
-                    piece = to_text(value)
-                except TemplateError as exc:
-                    raise TemplateError(f"variable {_echo_name(part)}: {exc}") from None
-            self._budget.charge(len(piece))
+                piece = self._value(part)
+                if type(piece) is not str:
+                    try:
+                        piece = to_text(piece)
+                    except TemplateError as exc:
+                        raise TemplateError(f"variable {_echo_name(part)}: {exc}") from None
+            charge(len(piece))
             pieces.append(piece)
         return "".join(pieces)
 
@@ -821,12 +879,17 @@ class _Renderer:
             return True
         self._budget.step()
         if isinstance(condition, Compare):
-            if condition.op == "in":
+            op = condition.op
+            if op == "in":
                 self._budget.step(len(condition.operand))
             value = self._lookup(condition.var)
             if value is _MISSING:
                 value = None
-            return self._compare(value, condition.op, condition.operand)
+            if op == "eq":
+                return _equal(value, condition.operand)
+            if op == "ne":
+                return not _equal(value, condition.operand)
+            return self._compare(value, op, condition.operand)
         if isinstance(condition, AllOf):
             return all(self._holds(item) for item in condition.conditions)
         if isinstance(condition, AnyOf):
@@ -875,7 +938,8 @@ class _Renderer:
         self._nodes(template.lines, buffer)
         lines = buffer.finish()
         for line in lines:
-            if neutralize(line) != line:
+            # ASCII-printable lines hold no code point of the neutralize table.
+            if not (line.isascii() and line.isprintable()) and neutralize(line) != line:
                 raise TemplateError("a rendered line holds a control or format character from an unfiltered value")
         rendered = output.join.join(lines)
         if output.trailing_newline and lines:
@@ -888,8 +952,9 @@ class _Renderer:
         :param nodes: The nodes.
         :param lines: The output line buffer, extended in place.
         """
+        step = self._budget.step
         for node in nodes:
-            self._budget.step()
+            step()
             if isinstance(node, LineNode):
                 if self._holds(node.when):
                     self._emit(lines, self._interpolate(node.text))
@@ -975,6 +1040,10 @@ class _Renderer:
         :returns: The JSON value.
         """
         self._budget.step()
+        # The node classes are unrelated, so testing the most frequent ones first
+        # changes nothing but the cost.
+        if isinstance(node, JsonVar):
+            return self._json_var(node)
         if isinstance(node, JsonLiteral):
             self._budget.charge(self._bounded_size(node.value))
             return node.value
@@ -990,8 +1059,6 @@ class _Renderer:
                 self._budget.charge(len(member.key) + 1 + (1 if result else 0))
                 result[member.key] = self._evaluate(member.value)
             return result
-        if isinstance(node, JsonVar):
-            return self._json_var(node)
         if isinstance(node, JsonFor):
             values: list[JsonValue] = []
             items = self._items(node.over)
@@ -1045,7 +1112,14 @@ class _Renderer:
             if value is _MISSING:
                 raise TemplateError(f"variable {_echo_name(node.var)} is not present in the render context")
             return None
-        self._budget.charge(self._bounded_size(value))
+        kind = type(value)
+        if kind is dict or kind is list:
+            self._budget.charge(self._bounded_size(value))
+        else:
+            # A checked context holds only exact JSON types, so this is _scalar_size;
+            # charging it unsaturated stops at the cap exactly when the saturated
+            # value would.
+            self._budget.charge(len(value) + 2 if kind is str else 1)
         return value
 
 
