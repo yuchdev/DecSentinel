@@ -414,3 +414,91 @@ def test_template_error_message_is_neutralized_and_bounded():
     long = str(TemplateError("x" * (MAX_MESSAGE * 2)))
     assert len(long) == MAX_MESSAGE and long.endswith("...")
     assert loader.TemplateError is TemplateError and loader.MAX_MESSAGE == MAX_MESSAGE
+
+
+#: Every ASCII code point as its own string, plus a mixed line exercising every
+#: GitHub delimiter, so the ASCII-printable fast paths are compared one by one.
+_ASCII_SAMPLES: tuple[str, ...] = (
+    *(chr(code_point) for code_point in range(0x80)),
+    "docs/a.md:3, 100% done",
+    "plain ascii path/with-dots_and.md",
+    "",
+)
+
+
+@pytest.mark.parametrize("sample", _ASCII_SAMPLES)
+def test_ascii_fast_paths_match_the_reference_tables(sample: str):
+    """
+    [Unit] filters: verifies the ASCII-printable fast paths equal the full table translation.
+
+    Scenario:
+        Given every single ASCII code point, a line holding ``%``, ``:`` and ``,``, and the empty string
+        When neutralize, gha_property and gha_data run, directly and as template filters
+        Then each output equals the frozen pre-move reference (``translate`` + ``replace`` chain).
+
+    Boundaries:
+        - Focus: regression guard for the ``isascii``/``isprintable`` and delimiter-search short cuts
+          (the all-code-points parity test feeds one non-ASCII string and never takes them)
+        - Fixtures/params: one case per ASCII code point plus mixed strings
+        - Scope: pure string functions, apply_filter
+
+    On failure, first check:
+        - the fast path in ``filters._neutralize_controls`` and ``_PROPERTY_SPECIAL``/``_DATA_SPECIAL``
+    """
+    assert neutralize(sample) == apply_filter("neutralize", sample) == _reference_neutralize(sample)
+    assert gha_property(sample) == apply_filter("gha_property", sample) == _reference_property(sample)
+    assert gha_data(sample) == apply_filter("gha_data", sample) == _reference_data(sample)
+
+
+def test_sink_filters_on_a_str_subclass_return_a_plain_escaped_str():
+    """
+    [Unit] filters: verifies a ``str`` subclass input skips the fast path and still returns a plain escaped str.
+
+    Scenario:
+        Given a ``str`` subclass instance holding ESC, and one holding only printable ASCII
+        When the three sink functions are applied
+        Then the results equal the reference and are exact ``str`` objects, as ``str.translate`` returns.
+
+    Boundaries:
+        - Focus: edge case: the fast paths are guarded by an exact ``type(value) is str`` check
+        - Fixtures/params: inline subclass
+        - Scope: pure string functions
+
+    On failure, first check:
+        - the ``type(value) is str`` guard in ``filters._neutralize_controls``
+    """
+
+    class Tagged(str):
+        """A ``str`` subclass standing in for an unexpected caller type."""
+
+    for raw in (f"a{ESC}b", "plain"):
+        value = Tagged(raw)
+        for function, reference in ((neutralize, _reference_neutralize), (gha_property, _reference_property)):
+            result = function(value)
+            assert result == reference(raw)
+            assert type(result) is str
+
+
+def test_to_text_refuses_an_int_past_the_digit_limit():
+    """
+    [Unit] filters: verifies an int too long to print is a TemplateError on the int fast path.
+
+    Scenario:
+        Given an int with more digits than the interpreter's int-to-text limit
+        When ``to_text`` and the ``neutralize`` filter are applied
+        Then ``TemplateError`` "too long" is raised, never a bare ``ValueError``.
+
+    Boundaries:
+        - Focus: invalid input on the ``int.__repr__`` short cut of ``to_text``
+        - Fixtures/params: none
+        - Scope: to_text, apply_filter
+
+    On failure, first check:
+        - the ``except ValueError`` of the int branch in ``filters.to_text``
+    """
+    huge = 10**5000
+    with pytest.raises(TemplateError, match="too long"):
+        to_text(huge)
+    with pytest.raises(TemplateError, match="too long"):
+        apply_filter("neutralize", huge)
+    assert to_text(-12) == "-12" and to_text(0) == "0"

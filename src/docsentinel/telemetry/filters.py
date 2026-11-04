@@ -30,6 +30,7 @@ the display but injects nothing, and the move keeps that behaviour byte-identica
 
 import json
 import math
+import re
 from collections.abc import Callable, Mapping
 from types import MappingProxyType
 from typing import Any, Final
@@ -104,7 +105,19 @@ def _neutralize_controls(value: str, *, keep_crlf: bool = False) -> str:
     :returns: ``value`` with every neutralised code point rendered as a visible
         ASCII backslash escape; ASCII-printable input is returned byte-identical.
     """
+    if type(value) is str and value.isascii() and value.isprintable():
+        # Fast path: both tables hold every ASCII code point that is not printable
+        # (U+0000-U+001F, U+007F; the GitHub table minus CR/LF, which are not
+        # printable either), and no printable ASCII one, so translate is the identity.
+        return value
     return value.translate(_GITHUB_CONTROL_TABLE if keep_crlf else _TEXT_CONTROL_TABLE)
+
+
+#: The characters :func:`_escape_property` percent-encodes; without one, its
+#: ``replace`` chain is the identity and is skipped.
+_PROPERTY_SPECIAL: Final[re.Pattern[str]] = re.compile("[%\r\n:,]")
+#: The characters :func:`_escape_data` percent-encodes.
+_DATA_SPECIAL: Final[re.Pattern[str]] = re.compile("[%\r\n]")
 
 
 def _escape_property(value: str) -> str:
@@ -115,6 +128,8 @@ def _escape_property(value: str) -> str:
     ``%``, CR, LF, ``:`` and ``,`` are percent-encoded per the runner contract.
     """
     neutral = _neutralize_controls(value, keep_crlf=True)
+    if _PROPERTY_SPECIAL.search(neutral) is None:
+        return neutral
     return neutral.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A").replace(":", "%3A").replace(",", "%2C")
 
 
@@ -125,6 +140,8 @@ def _escape_data(value: str) -> str:
     then ``%``, CR and LF are percent-encoded per the runner contract.
     """
     neutral = _neutralize_controls(value, keep_crlf=True)
+    if _DATA_SPECIAL.search(neutral) is None:
+        return neutral
     return neutral.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
 
 
@@ -244,6 +261,17 @@ def to_text(value: JsonValue) -> str:
     """
     if isinstance(value, str):
         return value
+    kind = type(value)
+    if kind is int:
+        # json.dumps spells an int with int.__repr__; the digit limit raises the same ValueError.
+        try:
+            return int.__repr__(value)
+        except ValueError:
+            raise TemplateError("a number is too long to be emitted as text") from None
+    if value is None:
+        return "null"
+    if kind is bool:
+        return "true" if value else "false"
     if not is_scalar(value):
         raise TemplateError(f"a {_kind_name(value)} cannot be emitted as text; reduce it with join, len or json")
     try:
@@ -267,16 +295,22 @@ def _scalar_text(value: JsonValue, name: str) -> str:
 
 def _filter_neutralize(value: JsonValue) -> str:
     """``neutralize`` filter: scalar text with unsafe code points escaped."""
+    if type(value) is str:
+        return _neutralize_controls(value)
     return neutralize(_scalar_text(value, "neutralize"))
 
 
 def _filter_gha_property(value: JsonValue) -> str:
     """``gha_property`` filter: scalar text escaped for a workflow command property."""
+    if type(value) is str:
+        return _escape_property(value)
     return gha_property(_scalar_text(value, "gha_property"))
 
 
 def _filter_gha_data(value: JsonValue) -> str:
     """``gha_data`` filter: scalar text escaped for a workflow command message."""
+    if type(value) is str:
+        return _escape_data(value)
     return gha_data(_scalar_text(value, "gha_data"))
 
 
@@ -367,6 +401,6 @@ def apply_filter(name: str, value: JsonValue, args: tuple[str, ...] = ()) -> Jso
     if function is None:
         raise TemplateError("unknown filter")
     expected = 1 if name in ("join", "default") else 0
-    if len(args) != expected or not all(isinstance(arg, str) for arg in args):
+    if len(args) != expected or (args and not all(isinstance(arg, str) for arg in args)):
         raise TemplateError(f"filter {name} takes {expected} string argument(s)")
     return function(value, *args)
