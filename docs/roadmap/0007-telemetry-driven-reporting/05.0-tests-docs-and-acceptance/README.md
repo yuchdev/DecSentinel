@@ -14,7 +14,7 @@ corpus that motivated it.
 | Task | Deliverable |
 |---|---|
 | [01](/docs/roadmap/0007-telemetry-driven-reporting/05.0-tests-docs-and-acceptance/01-test-matrix-and-security-review.md) | Cross-surface test matrix, tripwires, `security-auditor` review of template loading and `python:` extensions ✅ |
-| [02](/docs/roadmap/0007-telemetry-driven-reporting/05.0-tests-docs-and-acceptance/02-docs-and-canonixengine-acceptance.md) | `CLAUDE.md`/README/architecture/user docs, release notes, CanonixEngine acceptance run |
+| [02](/docs/roadmap/0007-telemetry-driven-reporting/05.0-tests-docs-and-acceptance/02-docs-and-canonixengine-acceptance.md) | `CLAUDE.md`/README/architecture/user docs, release notes, CanonixEngine acceptance run ✅ |
 
 ## Definition of done
 
