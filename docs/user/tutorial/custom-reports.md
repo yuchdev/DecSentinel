@@ -105,7 +105,7 @@ domain = "docs"
 - Character classes (`[...]`), braces, backslashes and a leading `!` are refused, as
   are empty, `.` and `..` segments. Matching is case-sensitive.
 - A domain matches `^[a-z][a-z0-9_-]{0,63}$`. At most 256 rules; a glob has at most 256
-  characters and 32 segments. A bad entry is a configuration error (exit `2`).
+  characters and 32 segments, and all globs together at most 4096 characters. A bad entry is a configuration error (exit `2`).
 - It is an array of tables, so a TOML formatter that sorts keys cannot reorder it.
 - In `pyproject.toml`, write `[[tool.doc_sentinel.telemetry_domains]]`.
 

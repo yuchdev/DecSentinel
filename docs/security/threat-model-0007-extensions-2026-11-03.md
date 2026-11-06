@@ -489,6 +489,8 @@ mitigations with an owning task.
     injected `Config` (fail closed with `ConfigError`):
     - <= 256 entries;
     - glob <= 256 characters and <= 32 segments;
+    - all globs together <= 4096 characters (added by the closure follow-up (a),
+      `MAX_DOMAIN_GLOBS_TOTAL_CHARS`);
     - a domain value matches `^[a-z][a-z0-9_-]{0,63}$` (ASCII; see D-D);
     - the table must be a TOML table of str -> str.
   - **M23.** Order: `tomllib` preserves document order and `load_config` reads a single

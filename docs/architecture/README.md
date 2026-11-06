@@ -29,6 +29,26 @@ Every consumer (CLI, Python library, pytest plugin) goes through the same engine
 `engine.scan` forwards the effective `Config` to any analyzer that declares a third `config`
 parameter. The two-argument `detect(root, documents)` form remains supported.
 
+### Report pipeline (Milestone 0007)
+
+A report is never formatted by the engine or a detector. The scan result is turned into a plain
+JSON-shaped context and handed to a logic-less template renderer
+([contract](/docs/specs/report-template-format.md#1-pipeline)):
+
+```text
+ScanResult --> ReportModel (core provider) --> + extension providers --> context
+                                                                           |
+template.json --> loader/validator --> renderer(template, context) --> sink (str)
+```
+
+- `ReportModel.build` classifies each finding (`classify`, the single source of fault class, tier,
+  outcome and `domain`) and never exposes `ScanResult` or `Finding` objects to a template.
+- Extensions (`builtin:domain`, `builtin:document_stats`, and `python:` ones allowed only from the
+  command line) add data under their own `ext.<name>` namespace. See
+  [Custom reports](/docs/user/tutorial/custom-reports.md).
+- The Milestone 0006 fault-event adapter is not implemented. When it lands it is specified to take
+  `domain` from the same `domain_for` function, so reports and events cannot disagree.
+
 ## Configuration
 
 Configuration is discovered in this order; the first match wins:

@@ -397,11 +397,12 @@ domain = "docs"
 
 Globs are split on `/`: `**` (a whole segment) matches zero or more segments, `*`
 and `?` never cross `/`, everything else is literal; the catch-all is `"**"`.
-Domain values match `^[a-z][a-z0-9_-]{0,63}$`. Matching uses a non-regex matcher.
+Domain values match `^[a-z][a-z0-9_-]{0,63}$`. Bounds: at most 256 rules, 256 characters and
+32 segments per glob, and 4096 characters of glob text in total. Matching uses a non-regex matcher.
 
-The same `domain_for(path, config)` fills the core `doc.domain` and
-`FaultEvent.domain` (Milestone 0006), so the report and the event stream can never
-disagree. `json.json` emits `{"$var": "doc.domain", "$default": "docs"}`.
+The same `domain_for(path, config)` fills the core `doc.domain`; the Milestone 0006 adapter
+(not implemented yet) is specified to call it for `FaultEvent.domain` too, so the report and
+the event stream cannot disagree. `json.json` emits `{"$var": "doc.domain", "$default": "docs"}`.
 
 ## 10. Errors
 

@@ -5,7 +5,8 @@
 #
 # builtin:domain sets the "domain" of every document in the JSON report
 # (doc.domain), under doc.ext.domain.name for templates that require the
-# extension, and in fault events (Milestone 0006). Without it, every document is
+# extension (the Milestone 0006 fault-event adapter, not yet implemented, is planned
+# to reuse it). Without it, every document is
 # in the "docs" domain. The label is asserted by the repository, not verified.
 #
 # Rules are tried in array order and the first matching glob wins. Globs match
@@ -14,7 +15,7 @@
 #   *    any characters inside one segment (never "/"); "*" alone is top-level files only
 #   ?    exactly one character inside one segment
 # [ ] { } \ and a leading ! are not supported. Domains match ^[a-z][a-z0-9_-]{0,63}$.
-# At most 256 rules. A path no rule matches gets the domain "docs".
+# At most 256 rules; 4096 characters of glob text in total. A path no rule matches gets the domain "docs".
 #
 # This is an array of tables, so a TOML formatter that sorts keys cannot reorder it.
 

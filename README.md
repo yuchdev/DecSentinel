@@ -77,9 +77,12 @@ uv run docsentinel scan docs/README.md
 uv run docsentinel scan --profile standard
 uv run docsentinel scan --profile deep --i-understand-deep-is-heuristic
 
-# Output formats: text (default), json, or github annotations
+# Output formats: text (default), json (schema 2), json-v1 (old schema 1), json-documents, github annotations
 uv run docsentinel scan --format json
-uv run docsentinel scan --format github
+uv run docsentinel scan --format json-v1   # the schema-1 bytes that --format json produced before 1.2.0
+uv run docsentinel scan --format github    # use this one in GitHub Actions
+uv run docsentinel scan --template my-report.json   # your own template, wins over --format
+# Writing a template or an extension: docs/user/tutorial/custom-reports.md
 
 # Strict mode: fail on warnings as well as errors
 uv run docsentinel scan --strict

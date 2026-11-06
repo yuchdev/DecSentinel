@@ -45,7 +45,8 @@ domain = "docs"
   O(pattern segments x path segments x segment cost); the per-segment step may reuse
   the DS118 two-pointer walk (`_glob_matches`). No `re` compiled from user text and
   no `fnmatch`.
-- **Bounds (M22).** <= 256 entries; glob <= 256 characters and <= 32 segments;
+- **Bounds (M22).** <= 256 entries; glob <= 256 characters and <= 32 segments; all globs together
+  <= 4096 characters (added by the closure threat model, follow-up (a));
   domain matches the D-D pattern. Checked in `load_config` **and** again in
   `domain_for` for an injected `Config` (fail closed with `ConfigError`).
 

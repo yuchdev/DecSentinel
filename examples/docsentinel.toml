@@ -117,3 +117,6 @@ ignore = ["DS103"]
 # documentation_naming_allow = ["README.md", "index.md"]  # exact filename exemptions
 # documentation_naming_directories = true  # whether to check directory components
 # documentation_naming_prefix_patterns = []  # e.g. ["[0-9][0-9][0-9][0-9]-"] for ADR numbers
+
+# --- Reports and extensions (Milestone 0007) ---
+# Domain labels (telemetry_extensions / telemetry_domains): see examples/telemetry-domains.toml

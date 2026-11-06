@@ -333,6 +333,7 @@ jobs:
 ## Further Reading
 
 - [CLI Tutorial & Reference Guide](cli.md) — Comprehensive command-line documentation.
+- [Custom Reports](custom-reports.md) — Write your own report template and extensions.
 - [Python Library Guide](library.md) — In-depth Python integration, Pytest plugin, and custom extensions.
 - [Statistical Checks Reference](../reference/statistical-checks.md) — DS201–DS203 threshold keys.
 - [Configuration Reference](../reference/configuration.md) — All Milestone 0005 fast-profile policy options (DS104–DS118).
