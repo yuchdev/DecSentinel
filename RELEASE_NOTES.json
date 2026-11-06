@@ -3,6 +3,17 @@
     "download_link": "https://packages-s3-useast1-any.s3.amazonaws.com/{package_name_dash}/{package_name_dash}-{version}-py3-none-any.whl"
   },
   "releases": {
+    "1.2.0": {
+      "release_notes": [
+        "BREAKING (D1): the default JSON report is now schema 2. `docsentinel scan --format json` emits one record per document, each with its `problems` (rule, type, message, value, line, column, fault class, tier, outcome) and a `domain`; clean documents appear with `problems: []`.",
+        "Migration: to keep the previous schema-1 bytes exactly, use `docsentinel scan --format json-v1`. `--format json-documents` is the bare per-document list.",
+        "Every report is now rendered from a JSON template over a JSON-shaped context built by the new `telemetry/` package; nothing about the layout is hardcoded. Packaged templates: `text`, `github`, `json`, `json-v1`, `json-documents`. The text report prints findings directly under their document and hides clean documents (`--show-clean-documents` or `report_show_clean_documents` shows them); the GitHub report adds `col` and `title=<rule>`.",
+        "New: `scan --template PATH` renders your own template; `scan --format NAME` also accepts templates from `report_templates_dir`, which fails closed (exit 2) for every format if it is unreadable or escapes the scan root. New config options: `report_templates_dir`, `report_show_clean_documents`, `report_include_run_meta`. See docs/user/tutorial/custom-reports.md.",
+        "New extension API: `--extension builtin:domain` labels each document (`telemetry_domains`, first match wins, default `docs`; at most 256 rules, 4096 glob characters in total) and `builtin:document_stats` adds problem density. Domain labels are asserted by the scanned repository, not verified.",
+        "`python:<module>:<callable>` extensions are accepted from the command line only (never from configuration, where one is a ConfigError) and only with `--allow-python-extensions` or `DOCSENTINEL_ALLOW_PYTHON_EXTENSIONS=1`. An admitted extension runs with full trust (it is not a sandbox) and the origin check is point-in-time. Do not set the variable for a whole workflow or job, in `pull_request_target` workflows, `.envrc` or pre-commit args. In GitHub Actions use `--format github`.",
+        "Not included: the Milestone 0006 fault-event adapter, `telemetry_sink` and FaultEvent emission are not implemented in this release."
+      ]
+    },
     "1.1.0": {
       "release_notes": [
         "Configuration discovery now accepts both docsentinel.toml and doc_sentinel.toml as the standalone config file; docsentinel.toml remains the preferred name.",
