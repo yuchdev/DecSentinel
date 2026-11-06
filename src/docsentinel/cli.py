@@ -340,6 +340,9 @@ def _run_init(root: Path, *, project_root: bool, assume_yes: bool) -> int:
     if legacy.exists():
         print(f"{legacy} already configures DocSentinel; not creating a second config file", file=sys.stderr)
         return 2
+    if target.exists():
+        print(f"{target} already exists; not overwriting it", file=sys.stderr)
+        return 2
     if not assume_yes and sys.stdin.isatty():
         try:
             answer = input(f"Create {target}? [Y/n] ").strip().lower()

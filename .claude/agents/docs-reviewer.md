@@ -1,7 +1,7 @@
 ---
 name: docs-reviewer
 description: Asynchronous semantic reviewer for the deep profile: triages DS301 fact-contradiction candidates to the ones worth human attention, and reviews doc-vs-code behavioral drift. Writes findings to docs/reviews/. Not a merge gate - produces a durable report for the team.
-model: claude-sonnet-4-6
+model: claude-sonnet-5-5
 tools: Read, Grep, Glob, Bash, Write, WebFetch, WebSearch
 allowed-tools: Read, Grep, Glob, Bash, Write, WebFetch, WebSearch
 ---

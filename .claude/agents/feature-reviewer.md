@@ -1,7 +1,7 @@
 ---
 name: feature-reviewer
 description: Use this agent to review PRs and in-session diffs for correctness, security, and DocSentinel domain accuracy. Use after coder finishes a change and before merge. Outputs a structured review with a single LGTM or REQUEST_CHANGES verdict. Read-only; never edits code.
-model: claude-sonnet-4-6
+model: claude-sonnet-5-5
 tools: Read, Grep, Glob, Bash
 allowed-tools: Read, Grep, Glob, Bash
 ---
