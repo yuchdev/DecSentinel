@@ -68,6 +68,21 @@ exclude_also = [
 [tool.hatch.build.targets.wheel]
 packages = ["src/docsentinel"]
 
+# Keep untracked working-tree state out of the sdist (close-review CR2, CWE-538): IDE settings,
+# local agent state/locks, build output, scratch files and review notes. Patterns are
+# gitignore-style and anchored at the project root; tests/ and src/ still ship in full.
+[tool.hatch.build.targets.sdist]
+exclude = [
+    "/.idea",
+    "/.claude/*.lock",
+    "/.claude/logs",
+    "/.claude/state",
+    "/.claude/worktrees",
+    "/dist",
+    "/scratch_head",
+    "/docs/reviews",
+]
+
 [tool.flakeforge]
 include = ["src", "tests", "scripts"]
 exclude = [".venv", "build", ".build", "dist", ".dist", "tests/assets"]
