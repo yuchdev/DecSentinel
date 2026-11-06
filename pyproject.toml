@@ -14,7 +14,9 @@ dependencies = [
     "docsig>=0.96",
     # deep profile
     "spacy>=3.8.16",
-    "textacy>=0.13",
+    # textacy needs floret, which publishes wheels for 3.12 only; installing it on 3.13 would
+    # compile C++ from source. The deep profile reports itself unavailable there (`doctor`).
+    "textacy>=0.13; python_version < '3.13'",
 ]
 
 [project.scripts]
