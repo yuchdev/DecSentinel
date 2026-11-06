@@ -153,3 +153,78 @@ No CRITICAL or HIGH findings. Task 01 may start. Milestone close is gated on: ch
 gaps 2, 3, 6, 7, 8, 11 closed, follow-up (c) M32/NUL closed, (a) fixed or explicitly
 accepted, (g) recorded on 0006, and C1 resolved (owner consent plus a pre-commit
 leak check, or reports kept out of git).
+
+## Close review 2026-11-06
+
+Scope: perf commits `a7bab52` (sink filters), `ffd23cf` (context check, renderer),
+`92136c8` (classification cache), docs `72d6d3d`/`8587770`, status `53f02e9`. No product
+code was changed by this review.
+
+### Neutralization fast paths (a7bab52, ffd23cf): no weakening
+- `_neutralize_controls` returns `value` unchanged when `isascii() and isprintable()`,
+  which is exactly U+0020-U+007E. Neither control table holds a code point in that
+  range. Every non-printable ASCII code point (C0, CR, LF, TAB, DEL/0x7F) fails
+  `isprintable()` and takes the translate path, so DEL and C0 are still escaped.
+- `%`, `:` and `,` are printable, so they pass the first fast path. They are then caught
+  by `_PROPERTY_SPECIAL` (`[%\r\n:,]`) or `_DATA_SPECIAL` (`[%\r\n]`). CR and LF reach
+  those regexes because the GitHub table keeps them. A regex miss means the replace chain
+  is the identity. `%` is still encoded first, so there is no double-decode.
+- A `str` subclass fails the `type(value) is str` check and takes the original path.
+  `to_text` treats `bool` separately from `int`, and the int digit limit still raises
+  `TemplateError`.
+- The renderer's unfiltered-line tripwire skips `neutralize` only for ASCII-printable
+  lines, and the same table argument applies. `reserve(0)` could never fire, so skipping
+  it for non-`json`/`join` filters loses no budget check. The inlined `$var` scalar charge
+  equals `_scalar_size`. `_check_context` still rejects non-string keys, cycles, `str`/`int`
+  subclasses and non-finite floats.
+- Verified with a differential run of 200,133 inputs (all ASCII, bidi, zero-width,
+  C1, surrogates, str subclasses). Each of `neutralize`/`gha_property`/`gha_data` and its
+  filter matched the translate-plus-replace reference exactly. No output held raw
+  CR/LF/`:`/`,` (property), raw CR/LF (data) or DEL. The telemetry, hostile-filename and
+  trust-gate suites pass (349 tests).
+- `92136c8`: `classify` derives `fault_class`/`tier`/`outcome` from rule, severity, strict
+  and config only. Its path-dependent `domain` is not used by `_problem`, so the
+  per-build `(rule, severity)` cache cannot mislabel an outcome.
+
+### Docs against the Task 02 constraints
+- (1) 0006 honesty: met in CLAUDE.md, the release notes, the guide and the architecture
+  section. (2) `python:` wording: argv-only, config `ConfigError`, full trust, not a
+  sandbox and point-in-time are present in CLAUDE.md, the release notes and the guide (R1/R3).
+  README does not describe the gate. (3) No workflow/job `env:`, `pull_request_target`,
+  `.envrc` or pre-commit `args:` example exists, and no tracked workflow sets the variable.
+  (4) README and the release notes recommend `--format github`, and the guide warns that `text` is
+  not Actions-safe. (6) The shipped docs and release notes contain no absolute local paths
+  (see CR3 for `status.md`). (7) D1 and the `json-v1` migration come first in the release notes.
+- C1/C2: `git ls-files docs/reviews` lists only `README.md` and `example-report.md`, both
+  from 2026-10-08 and neither containing CanonixEngine content. No acceptance report was
+  committed, so the C1 leak and the C2 replay risk do not apply.
+
+### [LOW] CR1 `docs/architecture/README.md:543` implies the fault-event adapter exists
+- "the same function the fault-event adapter uses" is in the present tense (pre-existing,
+  `37850c7`). It contradicts line 49 of the same file. Mitigation: reword to "the
+  function the Milestone 0006 adapter is specified to use".
+
+### [LOW] CR2 The sdist has no include list and ships working-tree files
+- `pyproject.toml:68-69` configures only the wheel. A local `uv build --sdist` of this
+  tree ships the untracked `.idea/` (including `workspace.xml`),
+  `.claude/scheduled_tasks.lock`, `docs/security/*` and `docs/reviews/*` (CWE-538).
+  C1(3) is therefore still open. Mitigation: add `[tool.hatch.build.targets.sdist]`
+  include/exclude, or build releases only from a clean checkout in CI.
+
+### [LOW] CR3 `status.md:98` names the corpus by home-relative path
+- It contains `~/Projects/CanonixEngine/docs`, against constraint 6 ("in `status.md`, by
+  name only"). The same string appears in the pre-existing `plan.md:27` and the Task 02 brief. No user name
+  is exposed, but the text ships in the sdist. Mitigation: replace it with "the CanonixEngine docs
+  corpus".
+
+### [LOW] CR4 The env-gate warning in the guide is narrower than constraint 3
+- `custom-reports.md:351-352` warns only about jobs that run untrusted PR heads. The release notes
+  and CLAUDE.md say never at workflow or job level. Mitigation: align the guide with the
+  release-notes sentence. The editable/project-local refusal is stated only in CLAUDE.md,
+  so also add it to the guide's trust model.
+
+### Verdict: PASS_WITH_FOLLOWUP
+No CRITICAL or HIGH findings. The perf commits keep every sink's neutralization and
+every render budget unchanged. CR1-CR4 are documentation and packaging hygiene and do not
+block the milestone close. Fixes go to `docs-updater` (CR1, CR3, CR4) and `python-expert`
+(CR2 packaging config).
