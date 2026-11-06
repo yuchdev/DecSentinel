@@ -24,7 +24,7 @@ and `json` become three packaged templates (`text.json`, `github.json`,
   touching the renderer.
 
 Motivating evidence: the CanonixEngine runs in
-`~/Projects/CanonixEngine/docs/reviews/docsentinel-docs-2026-10-26/` (9 reports,
+the `reviews/docsentinel-docs-2026-10-26/` directory of the CanonixEngine docs directory (9 reports,
 3 depths × 3 formats; 358 documents; the inventory buries the findings).
 
 ## Design constraints (fixed by ADR 0003)

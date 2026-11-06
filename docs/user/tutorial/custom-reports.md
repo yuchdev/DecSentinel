@@ -348,8 +348,9 @@ DocSentinel only runs one that **you**, the person invoking it, chose:
   A `python:` entry in `telemetry_extensions` is a configuration error, whatever the
   gate says, so a scanned repository's own configuration can never pick code to run.
   `builtin:` extensions need no gate.
-- **Never set the gate variable on CI jobs that run untrusted pull-request heads**, for
-  example in a workflow-wide `env:` block next to a `pull_request_target` job.
+- **Never set the gate variable for a whole workflow or job, and never for
+  `pull_request_target`.** Set it only on the single trusted step that needs it. Editable or
+  project-local installs are refused for `python:` extensions.
 - **Run the `docsentinel` console script** (not `python -m docsentinel`), or run Python
   with `-P`, and **do not put the checkout on `PYTHONPATH`**. DocSentinel refuses a
   `python:` extension when any import path entry, or the module itself, lies inside the

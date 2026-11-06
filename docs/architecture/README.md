@@ -540,5 +540,5 @@ stays byte-identical:
 `telemetry.model.ReportModel.build(result, config)` turns a `ScanResult` into the JSON-shaped
 context that report templates render from. `telemetry.model.CONTEXT_SCHEMA` declares each variable
 with its type and trust tag. Problems carry `fault_class`, `tier` and `outcome` from
-`telemetry.classify.classify`, the same function the fault-event adapter uses. See the
+`telemetry.classify.classify`, the function the Milestone 0006 adapter is specified to use. See the
 [report template format](/docs/specs/report-template-format.md).
