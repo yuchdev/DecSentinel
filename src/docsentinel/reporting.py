@@ -103,7 +103,7 @@ def render(
     """Render a scan result through a report template.
 
     The template is ``template`` when given (a loaded
-    :class:`~docsentinel.telemetry.loader.Template`, or a file path the invoker
+    ``Template``, or a file path the invoker
     trusts, which still passes the loader's regular-file/size/encoding gate);
     otherwise ``format`` is looked up as a template *name* -- never as a path --
     among the packaged templates and then ``config.report_templates_dir``.
@@ -128,14 +128,14 @@ def render(
     :param extensions: Extension specs equivalent to ``--extension`` (``builtin:<name>``
         or ``python:<module>:<callable>``), resolved after ``config.telemetry_extensions``;
         or a registry already resolved by
-        :func:`~docsentinel.telemetry.extensions.resolve_extensions` (as the CLI does
+        ``resolve_extensions`` (as the CLI does
         before the scan), used as-is.
     :param allow_python_extensions: The explicit trust gate for ``python:`` specs;
         never taken from the environment.
     :returns: The rendered report.
     :raises ValueError: If the template is unknown, unreadable, invalid, needs an
         extension that is not loaded, or fails to render; the message is bounded and
-        neutralized, and the :class:`~docsentinel.telemetry.filters.TemplateError`
+        neutralized, and the ``TemplateError``
         is chained as the cause.
     :raises docsentinel.telemetry.extensions.ExtensionError: If an extension is
         refused (including a ``python:`` spec without ``root``), cannot be loaded, or

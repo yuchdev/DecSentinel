@@ -283,9 +283,9 @@ class Interpolation:
 
     @property
     def variables(self) -> frozenset[str]:
-        """Return the set of referenced variable names.
+        """The immutable set of referenced variable names.
 
-        :returns: The ``name`` of every :class:`VarRef` part.
+        Includes the ``name`` of every ``VarRef`` part, without duplicates.
         """
         return frozenset(part.name for part in self.parts if isinstance(part, VarRef))
 

@@ -285,13 +285,13 @@ class ReportModel:
         ``result.documents`` verbatim as ``{path, bytes}`` records, so the schema-1
         ``json-v1`` template can reproduce the legacy ``documents`` list exactly.
         Every document carries the core ``domain`` from
-        :func:`~docsentinel.telemetry.builtin.domain.domain_for` (``"docs"`` unless
+        ``domain_for`` (``"docs"`` unless
         ``builtin:domain`` is in ``config.telemetry_extensions``); no hook can set it.
 
         :param result: The completed scan.
         :param config: The effective scan configuration.
         :param extensions: The loaded extension registry (spec §9) from
-            :func:`~docsentinel.telemetry.extensions.resolve_extensions`; its hooks
+            ``resolve_extensions``; its hooks
             run after the core context is built and their data is attached under
             ``ext.<name>``, ``doc.ext.<name>`` and ``p.ext.<name>``. Empty by default.
         :param strict: Whether warnings are blocking (``--strict``); feeds ``outcome``.
@@ -304,10 +304,10 @@ class ReportModel:
             (``--show-clean-documents`` / ``report_show_clean_documents``).
         :returns: The context tree (``dict``/``list``/``str``/``int``/``bool``/``None`` only).
         :raises TypeError: If ``extensions`` is a non-empty value that is not a
-            :class:`~docsentinel.telemetry.extensions.LoadedExtensions`.
+            ``LoadedExtensions``.
         :raises docsentinel.telemetry.extensions.ExtensionError: If a hook fails or
             returns invalid or oversized data.
-        :raises ValueError: If ``model`` does not match :data:`MODEL_ID_PATTERN`; the
+        :raises ValueError: If ``model`` does not match ``MODEL_ID_PATTERN``; the
             rejected value is never echoed, as it is untrusted invoker input.
         :raises docsentinel.config.ConfigError: If an injected ``config`` holds an
             invalid ``telemetry_domains`` or ``telemetry_extensions`` value.

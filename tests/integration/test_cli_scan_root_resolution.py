@@ -1,7 +1,7 @@
 """CLI scan-root resolution failures (Milestone 0007 Story 04.0 Task 02, security follow-up L-b).
 
-``Path.resolve`` raises ``RuntimeError`` on a symlink loop (Python 3.12). Before the fix it escaped
-``cli.main`` as a traceback with exit 1 -- the exit code of "blocking findings". It must be a
+Strict ``Path.resolve`` detects symlink loops on Python 3.12 and 3.13. Before the fix a
+Python 3.12 ``RuntimeError`` escaped as a traceback with exit 1. It must be a
 configuration failure: exit 2 with one neutralized ``Scan failed:`` / ``Baseline generation
 failed:`` line on stderr and nothing on stdout.
 """
@@ -104,3 +104,58 @@ def test_resolvable_root_is_returned_resolved(tmp_path: Path):
     (tmp_path / "docs").mkdir()
 
     assert cli._resolve_root(str(tmp_path / "docs" / "..")) == tmp_path.resolve()
+
+
+@pytest.mark.parametrize("spelling", ["missing", "missing/child", "missing/../other"])
+def test_nonexistent_root_retains_non_strict_resolution(spelling: str, tmp_path: Path):
+    """
+    [Integration] cli scan root resolution: preserves missing-root canonicalization.
+
+    Scenario:
+        Given a missing root anchored in an existing directory
+        When ``cli._resolve_root`` resolves its spelling
+        Then non-strict canonicalization is preserved for later scan-engine validation.
+
+    Boundaries:
+        - Focus: missing roots retain non-strict resolution
+        - Fixtures/params: simple, nested and parent-normalized missing-root spellings
+        - Scope: ``cli._resolve_root``
+
+    On failure, first check:
+        - The strict-resolution fallback in ``cli._resolve_root``
+
+    :param spelling: A missing-root spelling, including a normalized parent component.
+    :param tmp_path: An existing directory anchoring the missing root.
+    """
+    root = tmp_path / spelling
+
+    assert cli._resolve_root(str(root)) == root.resolve()
+
+
+def test_non_directory_component_retains_non_strict_resolution(tmp_path: Path):
+    """
+    [Integration] cli scan root resolution: preserves non-directory-root canonicalization.
+
+    Scenario:
+        Given a root ``file/child`` whose intermediate component is an existing regular file
+        When ``cli._resolve_root`` resolves its spelling
+        Then the same non-strict ``Path.resolve()`` result is returned.
+
+    Boundaries:
+        - Focus: NotADirectoryError falls back to non-strict resolution
+        - Fixtures/params: an existing regular file and a child component
+        - Scope: ``cli._resolve_root``, leaving root validation to the scan engine
+
+    On failure, first check:
+        - The NotADirectoryError fallback in ``cli._resolve_root``
+
+    :param tmp_path: An existing directory anchoring the regular file.
+    """
+    file = tmp_path / "file"
+    file.write_text("regular file", encoding="utf-8")
+    root = file / "child"
+
+    with pytest.raises(NotADirectoryError):
+        root.resolve(strict=True)
+
+    assert cli._resolve_root(str(root)) == root.resolve()

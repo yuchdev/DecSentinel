@@ -1158,13 +1158,11 @@ def render_template(
 ) -> str:
     """Render a validated template against a JSON-shaped context (Task 02 contract).
 
-    :param template: A :class:`~docsentinel.telemetry.loader.Template` from
-        :func:`~docsentinel.telemetry.loader.load_template` or
-        :func:`~docsentinel.telemetry.loader.validate_template`.
+    :param template: A ``Template`` from ``load_template`` or ``validate_template``.
     :param context: The context tree, e.g. from
-        :meth:`~docsentinel.telemetry.model.ReportModel.build`; it is read, never mutated.
+        ``ReportModel.build``; it is read, never mutated.
     :param extensions: The loaded extension registry from
-        :func:`~docsentinel.telemetry.extensions.resolve_extensions` (names and
+        ``resolve_extensions`` (names and
         filters of the same registry), or bare names of loaded extensions.
     :returns: The rendered report; identical bytes for identical inputs.
     :raises TemplateError: For a non-template, a missing required extension, a

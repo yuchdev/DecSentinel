@@ -214,16 +214,34 @@ class Extension(Protocol):
     name: str
 
     def provide_run(self, model: Mapping) -> Optional[Mapping]:
-        """Return run-level data for ``ext.<name>``, or ``None``."""
+        """Return run-level data for ``ext.<name>``, or ``None``.
+
+        :param model: A deep-frozen copy of the core report context.
+        :returns: JSON-shaped run data to attach, or ``None`` to add nothing.
+        """
 
     def provide_document(self, doc: Mapping, model: Mapping) -> Optional[Mapping]:
-        """Return document data for ``doc.ext.<name>``, or ``None``."""
+        """Return document data for ``doc.ext.<name>``, or ``None``.
+
+        :param doc: A deep-frozen copy of the core document entry.
+        :param model: A deep-frozen copy of the core report context.
+        :returns: JSON-shaped document data to attach, or ``None`` to add nothing.
+        """
 
     def provide_problem(self, problem: Mapping, doc: Mapping, model: Mapping) -> Optional[Mapping]:
-        """Return problem data for ``p.ext.<name>``, or ``None``."""
+        """Return problem data for ``p.ext.<name>``, or ``None``.
+
+        :param problem: A deep-frozen copy of the core nested problem entry.
+        :param doc: A deep-frozen copy of its core document entry.
+        :param model: A deep-frozen copy of the core report context.
+        :returns: JSON-shaped problem data to attach, or ``None`` to add nothing.
+        """
 
     def filters(self) -> Mapping[str, ExtensionFilter]:
-        """Return the filters to register, keyed ``ext.<name>.<filter>`` (optional)."""
+        """Return the filters to register, keyed ``ext.<name>.<filter>`` (optional).
+
+        :returns: Filter definitions keyed by fully qualified extension filter name.
+        """
 
 
 @dataclass(frozen=True)
@@ -1171,18 +1189,15 @@ class LoadedExtensions:
 
     @property
     def names(self) -> tuple[str, ...]:
-        """Return the loaded extension names, in order.
+        """The loaded extension names, in selection order.
 
-        :returns: The names ``requires_extensions`` is checked against.
+        These are the names ``requires_extensions`` is checked against.
         """
         return tuple(extension.name for extension in self.extensions)
 
     @property
     def builtin_specs(self) -> tuple[str, ...]:
-        """Return the ``builtin:`` specs, in order, for the effective ``Config`` (M25).
-
-        :returns: The builtin specs.
-        """
+        """The ``builtin:`` specs, in selection order, for the effective ``Config`` (M25)."""
         return tuple(extension.spec for extension in self.extensions if extension.builtin)
 
     def __bool__(self) -> bool:
@@ -1829,6 +1844,7 @@ def apply_report_hooks(
     and never a live object. ``ext`` is created by this function at the run level,
     on every document and on every problem (and its flat ``findings`` twin), so a
     hook return can never add, replace or remove a core key.
+    An empty registry leaves the context unchanged.
 
     :param context: The core context from ``ReportModel.build``; extended in place.
     :param loaded: The registry.

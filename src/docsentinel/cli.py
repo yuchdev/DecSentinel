@@ -1,6 +1,7 @@
 """Command-line access to the shared scan engine."""
 
 import argparse
+import errno
 import os
 import sys
 from dataclasses import replace
@@ -213,9 +214,10 @@ _MAX_ROOT_ECHO = 200
 def _resolve_root(spelled: str) -> Path:
     """Return the canonical scan root, turning a symlink loop into a ``ConfigError``.
 
-    ``Path.resolve`` raises ``RuntimeError`` on a symlink loop (Python 3.12), which
-    would otherwise escape as a traceback and exit 1. The root argument is invoker
-    input; it is bounded here and neutralized when the error is printed.
+    Strict resolution detects loops on both Python 3.12 and 3.13. Missing or
+    non-directory components retain non-strict resolution so root validation stays
+    with the scan engine. The root argument is invoker input; it is bounded here
+    and neutralized when the error is printed.
 
     :param spelled: The root argument as the invoker typed it.
     :returns: The resolved path.
@@ -223,10 +225,17 @@ def _resolve_root(spelled: str) -> Path:
         ``OSError`` while resolving).
     """
     try:
-        return Path(spelled).resolve()
+        path = Path(spelled)
+        try:
+            resolved = path.resolve(strict=True)
+        except (FileNotFoundError, NotADirectoryError):
+            # Preserve scan-engine validation of missing or non-directory components.
+            resolved = path.resolve()
+        return resolved
     except (RuntimeError, OSError) as exc:
         shown = spelled[:_MAX_ROOT_ECHO] + ("..." if len(spelled) > _MAX_ROOT_ECHO else "")
-        reason = "symlink loop" if isinstance(exc, RuntimeError) else type(exc).__name__
+        loop = isinstance(exc, RuntimeError) or isinstance(exc, OSError) and exc.errno == errno.ELOOP
+        reason = "symlink loop" if loop else type(exc).__name__
         raise ConfigError(f"cannot resolve the scan root {shown!r}: {reason}") from None
 
 
