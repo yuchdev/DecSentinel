@@ -32,10 +32,13 @@ python -c "from docsentinel.deep_support import deep_ready; import sys; sys.exit
 If exit code is non-zero (dependencies or model missing), print setup guidance and **stop immediately without writing a report**.
 
 ### 2. Capture candidates
-Run the confirmed deep scan and save JSON output to `.copilot/state/deep-review-candidates.json`:
+Run the confirmed deep scan and save JSON output to `.copilot/state/deep-review-candidates.json`.
+Use `--format json-v1`: it keeps the schema 1 shape (one flat `findings` list, each entry with its
+own `path`) that the `docs-reviewer` triage reads. The default `--format json` is schema 2, which
+groups problems per document.
 ```bash
 mkdir -p .copilot/state
-docsentinel scan --profile deep --i-understand-deep-is-heuristic --format json > .copilot/state/deep-review-candidates.json
+docsentinel scan --profile deep --i-understand-deep-is-heuristic --format json-v1 > .copilot/state/deep-review-candidates.json
 ```
 
 ### 3. Select review slice

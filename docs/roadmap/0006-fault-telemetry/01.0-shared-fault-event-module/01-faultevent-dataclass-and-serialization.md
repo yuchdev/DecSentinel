@@ -1,7 +1,7 @@
 # Task 01 — `FaultEvent` dataclass, serialization, and conformance tripwire
 
 **Parent story:** [Story 01.0](/docs/roadmap/0006-fault-telemetry/01.0-shared-fault-event-module/README.md)  
-**Proposed source:** `src/docsentinel/telemetry.py`
+**Proposed source:** `src/docsentinel/telemetry/`
 
 ## Required contract
 

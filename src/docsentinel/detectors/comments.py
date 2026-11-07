@@ -51,7 +51,12 @@ def _read_text(path: Path) -> str:
 
 
 def detect(root: Path, documents: tuple[models.Document, ...]) -> tuple[models.Finding, ...]:
-    """Return DS102 findings for Markdown documents in their supplied order."""
+    """Return DS102 findings for Markdown documents in their supplied order.
+
+    :param root: The scan root directory.
+    :param documents: Documents to inspect in their supplied order.
+    :returns: Findings with one-based code-point locations.
+    """
     findings: list[models.Finding] = []
     for document in documents:
         if not document.path.endswith(".md"):
@@ -68,9 +73,13 @@ def detect(root: Path, documents: tuple[models.Document, ...]) -> tuple[models.F
         last_closer_end = text.rfind("-->") + len("-->")
         line = 1
         line_cursor = 0
+        line_start = 0
         for match in _COMMENT_RE.finditer(text, 0, last_closer_end):
             start, end = match.span()
             line += text.count("\n", line_cursor, start)
+            last_newline = text.rfind("\n", line_cursor, start)
+            if last_newline != -1:
+                line_start = last_newline + 1
             line_cursor = start
             display_text = repr(text[start : min(end, start + 80)])
             if end - start > 80:
@@ -82,6 +91,8 @@ def detect(root: Path, documents: tuple[models.Document, ...]) -> tuple[models.F
                     message=f"stray HTML comment: {display_text}",
                     severity=DS102.severity,
                     line=line,
+                    column=start - line_start + 1,
+                    type="stray html comment",
                 )
             )
     return tuple(findings)

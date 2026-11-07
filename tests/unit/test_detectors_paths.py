@@ -8,10 +8,12 @@ import sys
 import types
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Optional
+from unittest import mock
 
 import pytest
 
-from docsentinel import rules
+from docsentinel import models, rules
 
 paths: types.ModuleType
 
@@ -297,3 +299,75 @@ def test_resolve_windows_anchored_candidate_is_unresolvable(tmp_path: Path, cand
         - Recent changes in code paths exercised by detectors paths
     """
     assert paths._resolve(candidate, tmp_path / "README.md", tmp_path) is None
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    (
+        ("é🙂 `a.py` x `b.py`", [(1, 5), (1, 14)]),
+        ("\n  `a.py` x `b.py`", [(2, 4), (2, 13)]),
+        ("`a.py`\n\n gap\né `b.py`", [(1, 2), (4, 4)]),
+        (
+            "`a.py`\n\n[é `label.py`\n](target)\n"
+            "`plain` `--flag` `../outside.py` `README.md` 🙂 `b.py`",
+            [(1, 2), (5, 49)],
+        ),
+        ("`broken\nspan`\n`a.py`", [(3, 2)]),
+        ("`unterminated", []),
+    ),
+    ids=("same-line-unicode", "cached-line-start", "gaps", "skips", "multiline", "unclosed"),
+)
+def test_detect_locations_search_every_span_only_since_previous_match(
+    tmp_path: Path, text: str, expected: list[tuple[int, int]]
+):
+    """
+    [Unit] detectors paths: advances bounded newline searches for every code span.
+
+    Scenario:
+        Given same-line spans, gaps, Unicode, skipped spans, or malformed spans
+        When detection locates missing paths
+        Then exact locations and disjoint search intervals include every parsed span.
+
+    Boundaries:
+        - Focus: cached line start updated before all skip branches
+        - Fixtures/params: isolated root, Markdown text, expected locations
+        - Scope: detector logic with document reading and fence stripping mocked
+
+    On failure, first check:
+        - Newline search bounds and cached line start in paths.detect
+
+    :param tmp_path: The isolated scan root containing an existing document.
+    :param text: Already unfenced Markdown supplied by the mocked reader.
+    :param expected: Exact one-based line and code-point column pairs.
+    """
+    searches: list[tuple[int, int]] = []
+
+    class TrackedText(str):
+        """Record newline-search bounds without changing string semantics."""
+
+        def rfind(self, sub: str, start: int = 0, end: Optional[int] = None) -> int:
+            """Record newline intervals and delegate to the built-in search.
+
+            :param sub: The searched substring.
+            :param start: The inclusive lower bound.
+            :param end: The exclusive upper bound, or the string length.
+            :returns: The rightmost matching offset, or minus one.
+            """
+            stop = len(self) if end is None else end
+            if sub == "\n":
+                searches.append((start, stop))
+            return super().rfind(sub, start, stop)
+
+    (tmp_path / "README.md").write_text("", encoding="utf-8")
+    tracked = TrackedText(text)
+    document = models.Document(path="README.md", bytes=len(text.encode("utf-8")))
+    with (
+        mock.patch.object(paths, "_read_text", return_value=tracked),
+        mock.patch.object(paths, "_strip_fenced_blocks", return_value=tracked),
+    ):
+        findings = paths.detect(tmp_path, (document,))
+
+    assert [(finding.line, finding.column) for finding in findings] == expected
+    starts = [match.start() for match in paths._CODE_SPAN_RE.finditer(text)]
+    previous_starts = [0, *starts[:-1]] if starts else []
+    assert searches == list(zip(previous_starts, starts, strict=True))

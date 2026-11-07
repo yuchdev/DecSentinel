@@ -1,7 +1,7 @@
 ---
 name: app-architect
 description: Use this agent as the high-level design authority for DocSentinel. Use for system design decisions, ADR authoring, defining interface contracts between components, and tech-debt triage. Does NOT write implementation code. Delegate the actual coding to python-expert once an ADR or contract is agreed.
-model: claude-opus-4-8
+model: claude-opus-5-5
 tools: Read, Grep, Glob, Write, Edit, WebFetch, WebSearch, TodoWrite
 allowed-tools: Read, Grep, Glob, Write, Edit, WebFetch, WebSearch, TodoWrite
 ---

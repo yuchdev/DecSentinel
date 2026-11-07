@@ -338,7 +338,7 @@ def test_reports_are_stable_across_formats(asset_case: Callable[[str, str], Asse
     assert render(result, "text") == text
     assert "error: README.md: unclosed" in text
 
-    payload = json.loads(render(result, "json"))
+    payload = json.loads(render(result, "json-v1"))
     assert payload["schema_version"] == 1
     assert payload["enabled_rules"] == ["DS109"]
     assert payload["findings"][0]["rule"] == "DS109"
@@ -346,7 +346,7 @@ def test_reports_are_stable_across_formats(asset_case: Callable[[str, str], Asse
 
     github = render(result, "github")
     assert render(result, "github") == github
-    assert github.startswith("::error file=README.md,line=5::")
+    assert github.startswith("::error file=README.md,line=5,title=DS109::")
 
 
 def test_cli_fast_json_scan_reports_ds109_and_exit_one(
@@ -371,7 +371,7 @@ def test_cli_fast_json_scan_reports_ds109_and_exit_one(
     """
     case = asset_case("ds109", "wrong_fence_character")
 
-    exit_code = cli.main(["scan", str(case.root), "--profile", "fast", "--format", "json"])
+    exit_code = cli.main(["scan", str(case.root), "--profile", "fast", "--format", "json-v1"])
 
     captured = capsys.readouterr()
     payload = json.loads(captured.out)

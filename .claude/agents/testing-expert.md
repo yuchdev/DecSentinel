@@ -1,7 +1,7 @@
 ---
 name: testing-expert
 description: Use this agent as the test engineer for DocSentinel. Use for test generation, test-gap analysis, and regression suites. For every new feature writes unit tests, integration tests with mocked externals, and a manual checklist in docs/test/. Runs the full suite and reports the coverage delta.
-model: claude-opus-4-8
+model: claude-opus-5-5
 tools: Read, Grep, Glob, Edit, Write, Bash, TodoWrite
 allowed-tools: Read, Grep, Glob, Edit, Write, Bash, TodoWrite
 ---

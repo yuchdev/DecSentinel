@@ -964,7 +964,7 @@ def test_reports_are_stable_across_formats(asset_case: Callable[[str, str], Asse
     assert render(result, "text") == text
     assert "error: README.md: missing asset: media/missing.png" in text
 
-    payload = json.loads(render(result, "json"))
+    payload = json.loads(render(result, "json-v1"))
     assert payload["schema_version"] == 1
     assert payload["enabled_rules"] == ["DS113"]
     assert payload["findings"][0]["rule"] == "DS113"
@@ -973,7 +973,7 @@ def test_reports_are_stable_across_formats(asset_case: Callable[[str, str], Asse
 
     github = render(result, "github")
     assert render(result, "github") == github
-    assert github.startswith("::error file=README.md,line=5::")
+    assert github.startswith("::error file=README.md,line=5,title=DS113::")
 
 
 def test_hostile_targets_are_bounded_and_repr_escaped(tmp_path: Path):
@@ -1043,7 +1043,7 @@ def test_cli_fast_json_scan_reports_ds113_and_exits_one_without_strict(
     """
     case = asset_case("ds113", "missing_html_image")
 
-    exit_code = cli.main(["scan", str(case.root), "--profile", "fast", "--format", "json"])
+    exit_code = cli.main(["scan", str(case.root), "--profile", "fast", "--format", "json-v1"])
     captured = capsys.readouterr()
     payload = json.loads(captured.out)
     ds113 = [finding for finding in payload["findings"] if finding["rule"] == "DS113"]
@@ -1081,7 +1081,7 @@ def test_cli_warn_policy_exits_zero_without_strict_and_one_with_strict(
     case = asset_case("ds113", "missing_html_image")
     (case.root / "docsentinel.toml").write_text('profile = "fast"\nmissing_asset_policy = "warn"\n', encoding="utf-8")
 
-    exit_code = cli.main(["scan", str(case.root), "--format", "json"])
+    exit_code = cli.main(["scan", str(case.root), "--format", "json-v1"])
     captured = capsys.readouterr()
     payload = json.loads(captured.out)
     ds113 = [finding for finding in payload["findings"] if finding["rule"] == "DS113"]

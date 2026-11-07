@@ -1,7 +1,7 @@
 ---
 name: incident-analyst
 description: Use this agent to review state-machine and escalation-safety correctness for any DocSentinel workflow that has a defined lifecycle and a human-escalation path (e.g. order processing, job/task queues, ticket or incident handling). Validates that every lifecycle transition has both a success and a failure exit, and that a low-confidence or rejected outcome always reaches a human rather than being silently finalized. Advisory + review; does not write product code.
-model: claude-opus-4-8
+model: claude-opus-5-5
 tools: Read, Grep, Glob, Bash, Write, Edit
 allowed-tools: Read, Grep, Glob, Bash, Write, Edit
 ---

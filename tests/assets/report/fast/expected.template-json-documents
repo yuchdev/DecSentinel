@@ -1,0 +1,52 @@
+[
+  {
+    "path": "README.md",
+    "bytes": 120,
+    "domain": "docs",
+    "problems": [
+      {
+        "rule": "DS101",
+        "type": "dangling link or anchor",
+        "message": "Dangling link target: ./missing.md",
+        "value": null,
+        "severity": "error",
+        "line": 3,
+        "column": null,
+        "fault_class": "dangling_reference",
+        "tier": "deterministic",
+        "outcome": "rejected"
+      }
+    ]
+  },
+  {
+    "path": "docs/guide.md",
+    "bytes": 342,
+    "domain": "docs",
+    "problems": [
+      {
+        "rule": "DS102",
+        "type": "stray HTML comment",
+        "message": "Stray HTML comment",
+        "value": null,
+        "severity": "warning",
+        "line": 7,
+        "column": null,
+        "fault_class": "residual_markup",
+        "tier": "deterministic",
+        "outcome": "advisory"
+      },
+      {
+        "rule": "DS103",
+        "type": "unresolvable path-like code span",
+        "message": "Unresolvable path: scripts/run.sh",
+        "value": null,
+        "severity": "warning",
+        "line": null,
+        "column": null,
+        "fault_class": "unresolvable_path",
+        "tier": "deterministic",
+        "outcome": "advisory"
+      }
+    ]
+  }
+]

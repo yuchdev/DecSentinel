@@ -1,11 +1,11 @@
 # Task 01 — Adapter, fault-class mapping, and outcome rules
 
 **Parent story:** [Story 03.0](/docs/roadmap/0006-fault-telemetry/03.0-adapter-and-engine-emission/README.md)  
-**Proposed source:** `src/docsentinel/telemetry.py`
+**Proposed source:** `src/docsentinel/telemetry/`
 
 ## Required contract
 
-The adapter lives in `telemetry.py` alongside the event type and sinks; it is the
+The adapter lives in `telemetry/` alongside the event type and sinks; it is the
 only code importing both the event machinery and DocSentinel types (`ScanResult`,
 `Finding`, `RULES`). There is no shared/path-referenced module to keep clean — the
 cross-tool coupling is the written spec only.

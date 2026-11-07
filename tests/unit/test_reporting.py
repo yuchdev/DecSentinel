@@ -5,7 +5,8 @@ import json
 import pytest
 
 from docsentinel.models import Finding, ScanResult
-from docsentinel.reporting import _escape_data, _escape_property, _gha_level, render
+from docsentinel.reporting import render
+from docsentinel.telemetry.filters import gha_data, gha_property
 
 
 def test_github_format_renders_error_and_warning_levels() :
@@ -38,7 +39,7 @@ def test_github_format_renders_error_and_warning_levels() :
         pending=(),
     )
     rendered = render(result, "github")
-    assert rendered == ("::error file=README.md,line=10::Broken link\n::warning file=guide.md,line=20::Stray comment")
+    assert rendered == ("::error file=README.md,line=10,title=DS101::Broken link\n::warning file=guide.md,line=20,title=DS102::Stray comment")
 
 
 def test_github_format_includes_known_line() :
@@ -67,7 +68,7 @@ def test_github_format_includes_known_line() :
         enabled_rules=("DS101",),
         pending=(),
     )
-    assert render(result, "github") == "::error file=docs/intro.md,line=7::Dangling link"
+    assert render(result, "github") == "::error file=docs/intro.md,line=7,title=DS101::Dangling link"
 
 
 def test_github_format_omits_unknown_line_and_column() :
@@ -99,7 +100,7 @@ def test_github_format_omits_unknown_line_and_column() :
         pending=(),
     )
     rendered = render(result, "github")
-    assert rendered == "::warning file=docs/ref.md::Unresolvable path"
+    assert rendered == "::warning file=docs/ref.md,title=DS103::Unresolvable path"
     assert "line=" not in rendered
     assert "col=" not in rendered
     assert "column=" not in rendered
@@ -161,8 +162,7 @@ def test_unknown_severity_maps_to_warning_level() :
             enabled_rules=("DS999",),
             pending=(),
         )
-        assert render(result, "github") == "::warning file=file.md,line=1::Some finding"
-        assert _gha_level(severity) == "warning"
+        assert render(result, "github") == "::warning file=file.md,line=1,title=DS999::Some finding"
 
 
 def test_gha_level_error_maps_to_error() :
@@ -184,7 +184,14 @@ def test_gha_level_error_maps_to_error() :
         - Fixture or parameter values used by this test
         - Recent changes in code paths exercised by reporting
     """
-    assert _gha_level("error") == "error"
+    result = ScanResult(
+        profile="fast",
+        documents=(),
+        findings=(Finding(rule="DS999", path="file.md", message="Some finding", severity="error", line=1),),
+        enabled_rules=("DS999",),
+        pending=(),
+    )
+    assert render(result, "github") == "::error file=file.md,line=1,title=DS999::Some finding"
 
 
 def test_github_format_escapes_message_newlines_carriage_returns_and_percents() :
@@ -218,7 +225,7 @@ def test_github_format_escapes_message_newlines_carriage_returns_and_percents() 
     assert "\n" not in rendered
     assert "\r" not in rendered
     assert rendered == (
-        "::error file=doc.md,line=5::Line 1%0A::set-output name=injected::evil%0D%0A"
+        "::error file=doc.md,line=5,title=DS101::Line 1%0A::set-output name=injected::evil%0D%0A"
         "Progress: 100%25 complete %250A not decoded"
     )
 
@@ -255,7 +262,7 @@ def test_github_format_escapes_property_delimiters() :
     rendered = render(result, "github")
     assert "\n" not in rendered
     assert "\r" not in rendered
-    assert rendered == ("::error file=docs/file%2Cname%3Awith%25delims%0D%0Aand%2Cmore.md,line=12::Problem found")
+    assert rendered == ("::error file=docs/file%2Cname%3Awith%25delims%0D%0Aand%2Cmore.md,line=12,title=DS101::Problem found")
 
 
 def test_escape_helpers_order_and_behavior() :
@@ -277,10 +284,10 @@ def test_escape_helpers_order_and_behavior() :
         - Fixture or parameter values used by this test
         - Recent changes in code paths exercised by reporting
     """
-    assert _escape_data("%\r\n") == "%25%0D%0A"
-    assert _escape_data("%0A") == "%250A"
-    assert _escape_property("%\r\n:,") == "%25%0D%0A%3A%2C"
-    assert _escape_property("%2C%3A") == "%252C%253A"
+    assert gha_data("%\r\n") == "%25%0D%0A"
+    assert gha_data("%0A") == "%250A"
+    assert gha_property("%\r\n:,") == "%25%0D%0A%3A%2C"
+    assert gha_property("%2C%3A") == "%252C%253A"
 
 
 def test_render_unsupported_format_raises_value_error() :
@@ -309,8 +316,10 @@ def test_render_unsupported_format_raises_value_error() :
         enabled_rules=(),
         pending=(),
     )
-    with pytest.raises(ValueError, match="Unsupported format: invalid"):
+    with pytest.raises(ValueError, match="unknown template: invalid"):
         render(result, "invalid")
+    with pytest.raises(ValueError, match="unknown template"):
+        render(result, "../escape.json")  # a format is a name, never a path to open
 
 
 def test_render_text_and_json_formats() :
@@ -347,6 +356,7 @@ def test_render_text_and_json_formats() :
     json_rendered = render(result, "json")
     assert '"profile": "fast"' in json_rendered
     assert '"rule": "DS101"' in json_rendered
+    assert '"rule": "DS101"' in render(result, "json-v1")
 
 
 def test_github_format_preserves_unicode_and_special_characters() :
@@ -384,7 +394,7 @@ def test_github_format_preserves_unicode_and_special_characters() :
         pending=(),
     )
     rendered = render(result, "github")
-    assert rendered == "::error file=docs/guide_日本語.md,line=42::Broken anchor ⚠️ -> #섹션"
+    assert rendered == "::error file=docs/guide_日本語.md,line=42,title=DS101::Broken anchor ⚠️ -> #섹션"
 
 
 def test_json_output_includes_schema_version() :
@@ -414,8 +424,11 @@ def test_json_output_includes_schema_version() :
         pending=(),
     )
     payload = json.loads(render(result, "json"))
-    assert payload["schema_version"] == 1
+    assert payload["schema_version"] == 2  # decision D1: the default json is schema 2
     assert list(payload.keys())[0] == "schema_version"
+    legacy = json.loads(render(result, "json-v1"))
+    assert legacy["schema_version"] == 1
+    assert list(legacy.keys())[0] == "schema_version"
 
 
 def test_text_output_includes_schema_version_line() :
@@ -515,7 +528,8 @@ def test_json_output_includes_finding_line() :
         pending=(),
     )
     payload_with_line = json.loads(render(result_with_line, "json"))
-    assert payload_with_line["findings"][0]["line"] == 42
+    assert payload_with_line["documents"][0]["problems"][0]["line"] == 42
+    assert json.loads(render(result_with_line, "json-v1"))["findings"][0]["line"] == 42
 
     result_without_line = ScanResult(
         profile="fast",
@@ -525,7 +539,8 @@ def test_json_output_includes_finding_line() :
         pending=(),
     )
     payload_without_line = json.loads(render(result_without_line, "json"))
-    assert payload_without_line["findings"][0]["line"] is None
+    assert payload_without_line["documents"][0]["problems"][0]["line"] is None
+    assert json.loads(render(result_without_line, "json-v1"))["findings"][0]["line"] is None
 
 
 def test_deep_run_with_findings_shows_advisory_banner_text() :
@@ -586,8 +601,9 @@ def test_deep_run_with_findings_advisory_in_json() :
         pending=(),
         notice="1 deep rule(s) evaluated (heuristic, advisory-only).",
     )
-    payload = json.loads(render(result, "json"))
-    assert payload["advisory"] == "Deep findings are heuristic candidates for review - they do not fail the build."
+    banner = "Deep findings are heuristic candidates for review - they do not fail the build."
+    assert json.loads(render(result, "json"))["run"]["advisory"] == banner
+    assert json.loads(render(result, "json-v1"))["advisory"] == banner
 
 
 def test_fast_run_has_no_advisory_banner() :
@@ -617,8 +633,8 @@ def test_fast_run_has_no_advisory_banner() :
         pending=(),
     )
     assert "Deep findings are heuristic candidates" not in render(result, "text")
-    payload = json.loads(render(result, "json"))
-    assert "advisory" not in payload
+    assert json.loads(render(result, "json"))["run"]["advisory"] is None
+    assert "advisory" not in json.loads(render(result, "json-v1"))
 
 
 def test_deep_run_without_findings_no_banner() :
@@ -649,5 +665,5 @@ def test_deep_run_without_findings_no_banner() :
         notice="1 deep rule(s) evaluated (heuristic, advisory-only).",
     )
     assert "Deep findings are heuristic candidates" not in render(result, "text")
-    payload = json.loads(render(result, "json"))
-    assert "advisory" not in payload
+    assert json.loads(render(result, "json"))["run"]["advisory"] is None
+    assert "advisory" not in json.loads(render(result, "json-v1"))

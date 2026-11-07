@@ -1,0 +1,34 @@
+{
+  "template_version": 1,
+  "name": "json-documents",
+  "type": "json",
+  "description": "Example template: the bare list of per-document records, clean documents included.",
+  "requires_extensions": [],
+  "schema_version": 2,
+  "output": { "indent": 2, "ensure_ascii": true, "sort_keys": false },
+  "body": {
+    "$for": "documents",
+    "as": "doc",
+    "each": {
+      "path": { "$var": "doc.path" },
+      "bytes": { "$var": "doc.bytes" },
+      "domain": { "$var": "doc.domain", "$default": "docs" },
+      "problems": {
+        "$for": "doc.problems",
+        "as": "p",
+        "each": {
+          "rule": { "$var": "p.rule" },
+          "type": { "$var": "p.type" },
+          "message": { "$var": "p.message" },
+          "value": { "$var": "p.value" },
+          "severity": { "$var": "p.severity" },
+          "line": { "$var": "p.line" },
+          "column": { "$var": "p.column" },
+          "fault_class": { "$var": "p.fault_class" },
+          "tier": { "$var": "p.tier" },
+          "outcome": { "$var": "p.outcome" }
+        }
+      }
+    }
+  }
+}

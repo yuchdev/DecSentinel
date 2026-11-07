@@ -31,9 +31,9 @@ scan time; all fast rules use only the Python standard library at run time.
 See the [dependency note](#dependency-note) below for a known inconsistency.
 
 ```bash
-pip install docsentinel
+pip install "docsentinel[fast]"
 # or with uv
-uv add docsentinel
+uv add --extra fast docsentinel
 ```
 
 ### 2. Standard Profile (Corpus statistics & Signature checks)
@@ -68,17 +68,17 @@ docsentinel doctor
 
 ### Profiles
 
-| Profile | Focus | Execution Speed | Optional extras |
-|---------|-------|-----------------|-----------------|
-| **`fast`** (default) | Structural and reference integrity: 16 rules (DS101–DS118) | Sub-second | None (fast rules use stdlib only at scan time) |
-| **`standard`** | Corpus analysis (text complexity, duplication, low-information text, docstring sync) | Fast (seconds) | `docsentinel[standard]`: `scikit-learn`, `textstat`, `docsig` |
-| **`deep`** | Semantic contradictions and subject-verb-object claims | Heuristic / Compute-intensive | `docsentinel[deep]`: `spacy`, `textacy`, `en_core_web_sm` model |
+| Profile              | Focus                                                                                | Execution Speed               | Optional extras                                                 |
+|----------------------|--------------------------------------------------------------------------------------|-------------------------------|-----------------------------------------------------------------|
+| **`fast`** (default) | Structural and reference integrity: 16 rules (DS101–DS118)                           | Sub-second                    | None (fast rules use stdlib only at scan time)                  |
+| **`standard`**       | Corpus analysis (text complexity, duplication, low-information text, docstring sync) | Fast (seconds)                | `docsentinel[standard]`: `scikit-learn`, `textstat`, `docsig`   |
+| **`deep`**           | Semantic contradictions and subject-verb-object claims                               | Heuristic / Compute-intensive | `docsentinel[deep]`: `spacy`, `textacy`, `en_core_web_sm` model |
 
 ### Dependency note
 
 `pyproject.toml` lists `spacy>=3.8.16` as a **core** runtime dependency, so every
 `pip install docsentinel` also installs spaCy. However, as of Story 15.0,
-`import docsentinel` no longer imports spaCy at module load: DS301's `contradictions`
+`import docsentinel` no longer imports spaCy at a module load: DS301's `contradictions`
 module imports its spaCy-dependent `_triples` module lazily on the first deep scan
 via `importlib.import_module`. Fast and standard scans never import or call any spaCy
 API. Whether to remove spaCy from the core dependencies in `pyproject.toml` is an
@@ -154,6 +154,8 @@ docsentinel scan --format json
 # GitHub Actions workflow annotations (::error, ::warning)
 docsentinel scan --format github
 ```
+
+For a field-by-field description of each format, with real sample output, see the [Report Formats guide](report.md).
 
 ---
 
@@ -333,6 +335,8 @@ jobs:
 ## Further Reading
 
 - [CLI Tutorial & Reference Guide](cli.md) — Comprehensive command-line documentation.
+- [Report Formats](report.md) — Text, JSON and GitHub report formats explained in detail.
+- [Custom Reports](custom-reports.md) — Write your own report template and extensions.
 - [Python Library Guide](library.md) — In-depth Python integration, Pytest plugin, and custom extensions.
 - [Statistical Checks Reference](../reference/statistical-checks.md) — DS201–DS203 threshold keys.
 - [Configuration Reference](../reference/configuration.md) — All Milestone 0005 fast-profile policy options (DS104–DS118).

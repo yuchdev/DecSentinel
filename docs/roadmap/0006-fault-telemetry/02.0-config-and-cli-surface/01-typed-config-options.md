@@ -1,7 +1,7 @@
 # Task 01 — Reference sinks and the `build_sink` factory
 
 **Parent story:** [Story 02.0](/docs/roadmap/0006-fault-telemetry/02.0-config-and-cli-surface/README.md)  
-**Proposed source:** `src/docsentinel/telemetry.py`
+**Proposed source:** `src/docsentinel/telemetry/`
 
 Full runnable reference implementations are in
 [the contract spec](/docs/specs/fault-event-contract.md) §6–§7; this task lands
@@ -40,6 +40,22 @@ them in DocSentinel and wires the selector factory.
   a trusted/loaded config, never from an untrusted checkout without opt-in. Mirror
   FlakeForge's error reporting shape (name the module/callable plus the underlying
   exception).
+- **Requirement from Milestone 0007 (cross-reference, not a redesign).** The
+  [0007 extensions threat model](/docs/security/threat-model-0007-extensions-2026-11-03.md)
+  (T1, M1-M4; plan D5 / decision D-A) binds this task:
+  - The `python:` gate is the one inside the **shared `importlib` helper**
+    ([0007 Story 04.0 Task 01](/docs/roadmap/0007-telemetry-driven-reporting/04.0-extensions/01-extension-api-and-loader.md)).
+    `build_sink` must call that helper with the gate decision and must not call
+    `importlib` itself.
+  - A `python:` sink is **argv-only** (`--telemetry-sink python:...` with
+    `--allow-python-extensions` or `DOCSENTINEL_ALLOW_PYTHON_EXTENSIONS=1` exactly).
+    `telemetry_sink = "python:..."` in config is a `ConfigError`. A refused spec is
+    exit 2, never swallowed by the emission path.
+  - `file:<path>` / `sqlite:<path>` paths read from repository config must be
+    **root-contained** (threat model "Out of scope, flagged for 0006", CWE-73). This
+    supersedes the "Not root-constrained" wording and the `file:../out.jsonl`
+    acceptance test in [Task 02](/docs/roadmap/0006-fault-telemetry/02.0-config-and-cli-surface/02-cli-flags-and-extra.md),
+    which the 0006 owner must reconcile before coding.
 - When telemetry is disabled the engine never calls `build_sink` (it uses
   `NullSink`); `build_sink` itself is only invoked for an enabled scan.
 - A malformed/unknown selector raises `ValueError`/`ConfigError`; an

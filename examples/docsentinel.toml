@@ -8,9 +8,9 @@
 # In pyproject.toml put the same keys under [tool.doc_sentinel] instead.
 
 # Which detector set to run. Profiles are exact, not cumulative:
-#   "fast"     - structural checks (DS101-DS118), standard library only at scan time
+#   "fast" - structural checks (DS101-DS118), standard library only at scan time
 #   "standard" - corpus and signature checks (DS201-DS204), needs docsentinel[standard]
-#   "deep"     - heuristic semantic checks (DS301), needs docsentinel[deep] + opt-in
+#   "deep" - heuristic semantic checks (DS301), needs docsentinel[deep] + opt-in
 profile = "fast"
 
 # Which files to inventory. Patterns are matched against paths relative to the scanned
@@ -18,7 +18,7 @@ profile = "fast"
 include = ["docs/*.md"]
 
 # Files or directories to skip, matched against relative paths and directory names.
-# Default: [".git", ".venv", "node_modules"]. Setting this list REPLACES the default.
+# Default: `[".git", ".venv", "node_modules"]` Setting this list REPLACES the default.
 exclude = []
 
 # Keep only these rules. Entries are exact codes ("DS101") or prefixes ("DS1" = every fast rule).
@@ -29,16 +29,16 @@ select = ["DS1"]
 ignore = ["DS103"]
 
 # --- Standard-profile options (profile = "standard") ---
-# max_grade_level = 14.0          # DS201: flag prose above this Flesch-Kincaid grade
-# duplicate_similarity = 0.85     # DS202: flag paragraph pairs at/above this cosine similarity
-# min_information_score = 0.15    # DS203: flag paragraphs scoring below this information score
-# docsig_paths = ["src"]          # DS204: Python source roots checked against docstrings
-# min_document_words = 50         # DS201: skip documents with fewer prose words
-# min_paragraph_words = 5         # DS202/DS203: skip paragraphs with fewer words
-# min_paragraph_chars = 30        # DS202/DS203: skip paragraphs shorter than this
+max_grade_level = 14.0          # DS201: flag prose above this Flesch-Kincaid grade
+duplicate_similarity = 0.85     # DS202: flag paragraph pairs at/above this cosine similarity
+min_information_score = 0.15    # DS203: flag paragraphs scoring below this information score
+docsig_paths = ["src"]          # DS204: Python source roots checked against docstrings
+min_document_words = 50         # DS201: skip documents with fewer prose words
+min_paragraph_words = 5         # DS202/DS203: skip paragraphs with fewer words
+min_paragraph_chars = 30        # DS202/DS203: skip paragraphs shorter than this
 
 # Deep profile only: acknowledge that DS301 is heuristic and advisory.
-# deep_confirm = false
+deep_confirm = false
 
 # =============================================================================
 # Fast-profile policy options (DS104-DS118)
@@ -46,74 +46,79 @@ ignore = ["DS103"]
 # =============================================================================
 
 # --- DS104: Anchor identity and collisions ---
-# anchor_collision_policy = "explicit"  # "off" | "explicit"
-# anchor_renderer = "github"            # "github" (only value; reserved for future renderers)
+anchor_collision_policy = "explicit"  # "off" | "explicit"
+anchor_renderer = "github"            # "github" (only value; reserved for future renderers)
 
 # --- DS105: Heading hierarchy validation ---
-# heading_level_policy = "no-skips"     # "off" | "no-skips"
-# first_heading_level = 1               # 1..6; first heading in a document must be this level
-# multiple_h1_policy = "allow"          # "allow" | "warn" (warn on H1 appearing more than once)
-# setext_heading_support = true         # include setext (underlined) headings in DS105 checks
+heading_level_policy = "no-skips"     # "off" | "no-skips"
+first_heading_level = 1               # 1..6; first heading in a document must be this level
+multiple_h1_policy = "allow"          # "allow" | "warn" (warn on H1 appearing more than once)
+setext_heading_support = true         # include setext (underlined) headings in DS105 checks
 
 # --- DS106: Contentless section detection ---
-# empty_section_policy = "leaf"         # "off" | "leaf" | "all"
-# placeholder_content_policy = "ignore" # "ignore" | "count" (whether HTML comments = content)
-# image_content_counts = true           # whether an image counts as section content
-# empty_section_min_text_chars = 0      # section must have strictly MORE than this many visible chars
+empty_section_policy = "leaf"         # "off" | "leaf" | "all"
+placeholder_content_policy = "ignore" # "ignore" | "count" (whether HTML comments = content)
+image_content_counts = true           # whether an image counts as section content
+empty_section_min_text_chars = 0      # section must have strictly MORE than these many visible chars
 
 # --- DS108: Reference definition integrity ---
-# unused_reference_definitions = false  # warn on definitions with no uses
-# duplicate_reference_definitions = "warn"  # "off" | "warn" | "error"
-# reference_label_normalization = "commonmark"  # only "commonmark" is supported
+unused_reference_definitions = false  # warn on definitions with no uses
+duplicate_reference_definitions = "warn"  # "off" | "warn" | "error"
+reference_label_normalization = "commonmark"  # only "commonmark" is supported
 
 # --- DS109: Fenced code boundary validation ---
-# fence_dialect = "gfm-subset"          # only "gfm-subset" is supported
-# report_stray_closing_fence = false    # reserved no-op in gfm-subset
+fence_dialect = "gfm-subset"          # only "gfm-subset" is supported
+report_stray_closing_fence = false    # reserved no-op in gfm-subset
 
 # --- DS110: Code fence language policy (OPT-IN: silent unless require_fence_languages = true) ---
-# require_fence_languages = false       # set to true to enable DS110
-# allow_unlabelled_empty_fences = true  # exempt empty fences from the language requirement
-# allowed_fence_languages = []          # [] = all languages accepted; otherwise an allowlist
+require_fence_languages = false       # set to true to enable DS110
+allow_unlabelled_empty_fences = true  # exempt empty fences from the language requirement
+allowed_fence_languages = []          # [] = all languages accepted; otherwise an allowlist
 
 # --- DS112: Declared navigation integrity (OPT-IN: silent unless navigation_indexes is set) ---
-# navigation_indexes = []               # set to e.g. ["docs/README.md"] to enable DS112
-# navigation_required = []             # documents that must appear in at least one nav link
-# navigation_unique_targets = true      # warn if a navigation target appears more than once
-# navigation_check_missing = true       # warn if a navigation target does not exist on disk
+navigation_indexes = []               # set to e.g. ["docs/README.md"] to enable DS112
+navigation_required = []              # documents that must appear in at least one nav link
+navigation_unique_targets = true      # warn if a navigation target appears more than once
+navigation_check_missing = true       # warn if a navigation target does not exist on disk
 
 # --- DS113: Missing local media assets ---
-# asset_extensions = ["png", "jpg", "jpeg", "svg", "webp", "gif", "pdf"]
-# check_html_asset_tags = true          # inspect HTML <img>, <source>, <a href> tags
-# check_markdown_images = true          # inspect Markdown image syntax
-# check_srcset = true                   # inspect srcset candidates
-# missing_asset_policy = "error"        # "off" | "warn" | "error"
-#   Set to "warn" for repos where assets are generated/LFS-stored and absent at lint time.
+asset_extensions = ["png", "jpg", "jpeg", "svg", "webp", "gif", "pdf"]
+check_html_asset_tags = true          # inspect HTML <img>, <source>, <a href> tags
+check_markdown_images = true          # inspect Markdown image syntax
+check_srcset = true                   # inspect srcset candidates
+
+# Set to "warn" for repos where assets are generated/LFS-stored and absent at lint time.
+missing_asset_policy = "error"        # "off" | "warn" | "error"
 
 # --- DS114: Duplicate stable document identifiers ---
-# document_id_field = "id"             # frontmatter key whose value is the stable identity
-# document_id_scope = "corpus"         # "corpus" | "directory"
-# document_id_case_sensitive = true    # whether identity comparison is case-sensitive
-# document_id_required = false         # whether every document must declare an identity
+document_id_field = "id"             # frontmatter key whose value is the stable identity
+document_id_scope = "corpus"         # "corpus" | "directory"
+document_id_case_sensitive = true    # whether identity comparison is case-sensitive
+document_id_required = false         # whether every document must declare an identity
 
 # --- DS115: Deprecated names and migrated references (OPT-IN: silent unless set) ---
-# deprecated_references_file = ""      # set to e.g. ".deprecated-names.toml" to enable DS115
-# deprecated_check_prose = true        # check prose and inline code for deprecated terms
-# deprecated_check_links = true        # check link targets for deprecated paths
-# deprecated_case_sensitive = true     # whether matching is case-sensitive
+deprecated_references_file = ""      # set to e.g. ".deprecated-names.toml" to enable DS115
+deprecated_check_prose = true        # check prose and inline code for deprecated terms
+deprecated_check_links = true        # check link targets for deprecated paths
+deprecated_case_sensitive = true     # whether matching is case-sensitive
 
 # --- DS116: Path traversal outside documentation root ---
-# root_escape_policy = "error"         # "off" | "warn" | "error"
-#   Polyrepo note: set to "warn" or "off" when docs intentionally reference sibling repos.
-# decode_percent_paths = true          # decode percent-encoded paths once before checking
-# windows_path_policy = "portable"     # "off" | "portable" (report drive/UNC/backslash)
+decode_percent_paths = true          # decode percent-encoded paths once before checking
+windows_path_policy = "portable"     # "off" | "portable" (report drive/UNC/backslash)
+
+# Polyrepo note: set to "warn" or "off" when docs intentionally reference sibling repos.
+root_escape_policy = "error"         # "off" | "warn" | "error"
 
 # --- DS117: GFM pipe-table structural validation ---
-# table_dialect = "gfm-subset"         # only "gfm-subset" is supported
-# table_strict_cells = true            # warn on inconsistent cell counts
-# table_enable = true                  # set to false to disable all table checking
+table_dialect = "gfm-subset"         # only "gfm-subset" is supported
+table_strict_cells = true            # warn on inconsistent cell counts
+table_enable = true                  # set to `false` to disable all table checking
 
 # --- DS118: Documentation file and directory naming (OPT-IN: silent unless set) ---
-# documentation_naming = "off"         # "off" | "kebab" | "snake"
-# documentation_naming_allow = ["README.md", "index.md"]  # exact filename exemptions
-# documentation_naming_directories = true  # whether to check directory components
-# documentation_naming_prefix_patterns = []  # e.g. ["[0-9][0-9][0-9][0-9]-"] for ADR numbers
+documentation_naming = "off"         # "off" | "kebab" | "snake"
+documentation_naming_allow = ["README.md", "index.md"]  # exact filename exemptions
+documentation_naming_directories = true    # whether to check directory components
+documentation_naming_prefix_patterns = []  # e.g. ["[0-9][0-9][0-9][0-9]-"] for ADR numbers
+
+# --- Reports and extensions (Milestone 0007) ---
+# Domain labels (telemetry_extensions / telemetry_domains): see examples/telemetry-domains.toml

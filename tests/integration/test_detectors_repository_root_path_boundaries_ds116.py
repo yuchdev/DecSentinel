@@ -590,7 +590,7 @@ def test_reports_are_stable_across_formats(asset_case: Callable[[str, str], Asse
     assert render(result, "text") == text
     assert "error: README.md: reference escapes the documentation root: ../../secrets.md" in text
 
-    payload = json.loads(render(result, "json"))
+    payload = json.loads(render(result, "json-v1"))
     assert payload["schema_version"] == 1
     assert payload["enabled_rules"] == ["DS116"]
     assert payload["findings"][0]["rule"] == "DS116"
@@ -599,7 +599,7 @@ def test_reports_are_stable_across_formats(asset_case: Callable[[str, str], Asse
 
     github = render(result, "github")
     assert render(result, "github") == github
-    assert github.startswith("::error file=README.md,line=3::")
+    assert github.startswith("::error file=README.md,line=3,title=DS116::")
 
 
 def test_cli_fast_json_scan_reports_ds116_and_exits_one_without_strict(
@@ -625,7 +625,7 @@ def test_cli_fast_json_scan_reports_ds116_and_exits_one_without_strict(
     """
     case = asset_case("ds116", "parent_escape_from_root")
 
-    exit_code = cli.main(["scan", str(case.root), "--profile", "fast", "--format", "json"])
+    exit_code = cli.main(["scan", str(case.root), "--profile", "fast", "--format", "json-v1"])
     captured = capsys.readouterr()
     payload = json.loads(captured.out)
     ds116 = [finding for finding in payload["findings"] if finding["rule"] == "DS116"]
@@ -941,7 +941,7 @@ def test_hostile_targets_are_bounded_and_repr_escaped(tmp_path: Path):
     text = render(result, "text")
     assert "\x1b" not in text and "\x00" not in text
     assert "\\x1b" in text and "\\x00" in text
-    error_lines = [line for line in text.splitlines() if line.startswith("error: README.md:")]
+    error_lines = [line for line in text.splitlines() if line.startswith("  error: README.md:")]
     assert len(error_lines) == len(hostile_targets)  # no message broke onto a second line
 
     github = render(result, "github")

@@ -1,7 +1,7 @@
 ---
 name: task-verifier
 description: Use this agent to verify that a finished implementation matches the task spec in docs/roadmap/{NNNN}-{milestone-slug}/{TT.t}-{story-slug}/. Run after implementation, before /pr-review and /test-gap. Produces a spec-compliance matrix with PASS/PARTIAL/FAIL verdict. Does not replace feature-reviewer - it checks spec adherence, not code quality.
-model: claude-sonnet-4-6
+model: claude-sonnet-5-5
 tools: Read, Grep, Glob, Bash
 allowed-tools: Read, Grep, Glob, Bash
 ---

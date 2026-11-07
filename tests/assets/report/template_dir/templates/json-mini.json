@@ -1,0 +1,15 @@
+{
+  "template_version": 1,
+  "name": "json-mini",
+  "type": "json",
+  "schema_version": 2,
+  "output": { "indent": 2, "ensure_ascii": true, "sort_keys": false },
+  "body": {
+    "profile": { "$var": "profile" },
+    "model": { "$omit_if": { "var": "model", "eq": null }, "value": { "$var": "model" } },
+    "documents": { "$for": "documents", "as": "doc", "each": {
+      "path": { "$var": "doc.path" },
+      "problems": { "$for": "doc.problems", "as": "p", "each": { "$str": "{doc.path}:{p.line}: {p.message}" } }
+    } }
+  }
+}

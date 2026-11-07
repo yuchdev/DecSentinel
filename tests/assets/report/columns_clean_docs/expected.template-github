@@ -1,0 +1,5 @@
+::error file=README.md,line=5,col=10,title=DS101::dangling link -> /docs/adr/README.md
+::error file=README.md,line=5,col=45,title=DS101::dangling link -> /docs/adr/README.md
+::warning file=README.md,title=DS103::Unresolvable path: scripts/run.sh
+::error file=docs/z.md,line=4,col=12,title=DS101::dangling link -> ./gone.md
+::warning file=docs/z.md,line=9,col=1,title=DS102::Stray HTML comment

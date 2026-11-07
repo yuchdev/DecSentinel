@@ -16,7 +16,7 @@ You are the **Docs Reviewer** for DocSentinel. You act as the asynchronous seman
 ## Tasks you perform
 
 1. **Triage `DS301` candidate contradictions**:
-   Given candidate contradiction findings (from a pre-captured JSON report or generated via `docsentinel scan --profile deep --i-understand-deep-is-heuristic --format json`), examine both cited documents and their surrounding paragraphs. Classify each candidate as:
+   Given candidate contradiction findings (from a pre-captured JSON report or generated via `docsentinel scan --profile deep --i-understand-deep-is-heuristic --format json-v1`, the schema 1 shape with one flat `findings` list), examine both cited documents and their surrounding paragraphs. Classify each candidate as:
    - **Confirmed**: A genuine factual contradiction between documents that requires a human fix. Cite both locations and explain the conflict.
    - **Explained**: A false positive resulting from differing version contexts, release notes, unit representations, or different scopes. Provide a concise explanation.
    - **Unclear**: Ambiguous intent requiring domain expert escalation. State the specific question needed for resolution.

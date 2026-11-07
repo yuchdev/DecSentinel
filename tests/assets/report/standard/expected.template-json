@@ -1,0 +1,108 @@
+{
+  "schema_version": 2,
+  "profile": "standard",
+  "run": {
+    "model": null,
+    "notice": "4 standard rule(s) evaluated.",
+    "advisory": null
+  },
+  "summary": {
+    "documents": 2,
+    "documents_with_problems": 2,
+    "findings": 4,
+    "by_severity": {
+      "error": 1,
+      "warning": 3
+    },
+    "by_rule": {
+      "DS201": 1,
+      "DS202": 1,
+      "DS203": 1,
+      "DS204": 1
+    }
+  },
+  "rules": {
+    "enabled": [
+      "DS201",
+      "DS202",
+      "DS203",
+      "DS204"
+    ],
+    "evaluated": 0,
+    "opt_in_off": []
+  },
+  "documents": [
+    {
+      "path": "docs/a.md",
+      "bytes": 1024,
+      "domain": "docs",
+      "problems": [
+        {
+          "rule": "DS201",
+          "type": "high text complexity",
+          "message": "Grade level 19.2 exceeds max_grade_level 18.0",
+          "value": null,
+          "severity": "warning",
+          "line": null,
+          "column": null,
+          "fault_class": "high_complexity",
+          "tier": "deterministic",
+          "outcome": "advisory"
+        }
+      ]
+    },
+    {
+      "path": "docs/b.md",
+      "bytes": 2048,
+      "domain": "docs",
+      "problems": [
+        {
+          "rule": "DS202",
+          "type": "duplicated text or facts",
+          "message": "Paragraph duplicates docs/a.md:4 (similarity 0.97)",
+          "value": null,
+          "severity": "warning",
+          "line": 9,
+          "column": null,
+          "fault_class": "duplicate_text",
+          "tier": "deterministic",
+          "outcome": "advisory"
+        },
+        {
+          "rule": "DS203",
+          "type": "low-information content",
+          "message": "Low-information paragraph (score 0.05)",
+          "value": null,
+          "severity": "warning",
+          "line": 15,
+          "column": null,
+          "fault_class": "low_information",
+          "tier": "deterministic",
+          "outcome": "advisory"
+        }
+      ]
+    },
+    {
+      "path": "src/calc.py",
+      "bytes": null,
+      "domain": "docs",
+      "problems": [
+        {
+          "rule": "DS204",
+          "type": "docstring/signature mismatch",
+          "message": "Docstring parameter 'y' does not exist in add(x)",
+          "value": null,
+          "severity": "error",
+          "line": 12,
+          "column": null,
+          "fault_class": "contract_mismatch",
+          "tier": "deterministic",
+          "outcome": "rejected"
+        }
+      ]
+    }
+  ],
+  "pending": [
+    "DS204: no docsig_paths configured"
+  ]
+}

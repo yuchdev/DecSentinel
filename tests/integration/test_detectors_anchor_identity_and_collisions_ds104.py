@@ -485,7 +485,7 @@ def test_reports_are_stable_across_formats(asset_case: Callable[[str, str], Asse
     assert render(result, "text") == text
     assert "warning: README.md: explicit anchor 'setup' is defined more than once" in text
 
-    payload = json.loads(render(result, "json"))
+    payload = json.loads(render(result, "json-v1"))
     assert payload["schema_version"] == 1
     assert payload["enabled_rules"] == ["DS104"]
     assert payload["findings"][0]["rule"] == "DS104"
@@ -494,7 +494,7 @@ def test_reports_are_stable_across_formats(asset_case: Callable[[str, str], Asse
 
     github = render(result, "github")
     assert render(result, "github") == github
-    assert github.startswith("::warning file=README.md,line=7::")
+    assert github.startswith("::warning file=README.md,line=7,title=DS104::")
 
 
 def test_cli_fast_json_scan_reports_ds104_warning_and_exit_zero(
@@ -520,7 +520,7 @@ def test_cli_fast_json_scan_reports_ds104_warning_and_exit_zero(
     """
     case = asset_case("ds104", "duplicate_named_anchors")
 
-    exit_code = cli.main(["scan", str(case.root), "--profile", "fast", "--format", "json"])
+    exit_code = cli.main(["scan", str(case.root), "--profile", "fast", "--format", "json-v1"])
 
     captured = capsys.readouterr()
     payload = json.loads(captured.out)
@@ -1049,6 +1049,6 @@ def test_hostile_anchor_id_cannot_inject_into_text_or_github_output(tmp_path: Pa
     github = render(result, "github")
     github_lines = github.split("\n")
     assert len(github_lines) == 1  # exactly one ::warning line for the one finding
-    assert github_lines[0].startswith("::warning file=README.md,line=5::")
+    assert github_lines[0].startswith("::warning file=README.md,line=5,title=DS104::")
     assert "\x1b" not in github  # no raw control byte survives into the annotation
     assert "%250A" in github  # the literal %0A had its % escaped, so it cannot be a command break

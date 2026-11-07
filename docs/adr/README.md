@@ -10,6 +10,7 @@ are in `assets/`.
 |------------------------------------------------------------------|----------------------------------------------------|----------|------------|
 | [0001](0001-config-loading-via-layered-settings.md) *(example - delete once you have a real ADR)* | Config Loading via Layered pydantic-settings Sources | Accepted | 2026-01-15 |
 | [0002](0002-fault-telemetry-event-emission.md) | Fault-Telemetry Event Emission via a Written Contract and Pluggable Sinks | Accepted | 2026-10-26 |
+| [0003](0003-template-driven-reporting-on-telemetry.md) | Template-Driven Reporting Built on a Telemetry Package | Proposed | 2026-10-30 |
 
 ## Example ADR (delete before this project ships)
 

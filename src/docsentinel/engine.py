@@ -134,6 +134,28 @@ def _resolve_deep_confirm(settings: Config) -> bool:
     return settings.deep_confirm or _env_confirms()
 
 
+def evaluated_notice(profile: str, rules_evaluated: int, opt_in_off: tuple[tuple[str, str], ...]) -> str:
+    """Build the legacy ``ScanResult.notice`` for a scan that ran at least one active rule.
+
+    This is the single source of the notice text: :func:`scan` stores
+    ``rules_evaluated`` and ``opt_in_off`` on the result and derives the notice from
+    them here, so the structured fields and the string can never disagree.
+
+    :param profile: The scan profile (``fast``/``standard``/``deep``).
+    :param rules_evaluated: Active rules that genuinely evaluated.
+    :param opt_in_off: ``(code, option)`` pairs for active opt-in rules whose policy is off.
+    :returns: The byte-identical legacy notice string.
+    """
+    if profile == "deep":
+        # The deep notice has always counted every active rule.
+        return f"{rules_evaluated + len(opt_in_off)} deep rule(s) evaluated (heuristic, advisory-only)."
+    notice = f"{rules_evaluated} {profile} rule(s) evaluated"
+    if opt_in_off:
+        disabled = ", ".join(f"{code} (set {option})" for code, option in opt_in_off)
+        return f"{notice}; opt-in rule(s) not enabled: {disabled}."
+    return f"{notice}."
+
+
 def scan(root: Union[Path, str] = ".", *, config: Optional[Config] = None) -> ScanResult:
     """Inventory documents and run registered analyzers, without implicit deep checks."""
     target = Path(root).resolve()
@@ -194,22 +216,18 @@ def scan(root: Union[Path, str] = ".", *, config: Optional[Config] = None) -> Sc
         )
         known = load_baseline(baseline_path)
         findings = filter_baselined(findings, known)
+    rules_evaluated = 0
+    opt_in_off: tuple[tuple[str, str], ...] = ()
     if active_codes:
         pending = ()
         # Opt-in policy rules that are active but whose policy is off evaluate
         # nothing, so the notice must not count them among the evaluated rules;
         # it names them instead so a disabled policy never masquerades as audited.
-        off_rules = tuple(RULES[code] for code in active_codes if not opt_in_satisfied(RULES[code], settings))
-        evaluated_count = len(active_codes) - len(off_rules)
-        if settings.profile == "deep":
-            notice = f"{len(active_codes)} deep rule(s) evaluated (heuristic, advisory-only)."
-        else:
-            notice = f"{evaluated_count} {settings.profile} rule(s) evaluated"
-            if off_rules:
-                disabled = ", ".join(f"{rule.code} (set {rule.opt_in_option})" for rule in off_rules)
-                notice += f"; opt-in rule(s) not enabled: {disabled}."
-            else:
-                notice += "."
+        opt_in_off = tuple(
+            (code, RULES[code].opt_in_option) for code in active_codes if not opt_in_satisfied(RULES[code], settings)
+        )
+        rules_evaluated = len(active_codes) - len(opt_in_off)
+        notice = evaluated_notice(settings.profile, rules_evaluated, opt_in_off)
     elif not profile_codes:
         if settings.profile == "deep":
             pending = ("deep profile confirmed, but no deep rules are registered",)
@@ -226,4 +244,6 @@ def scan(root: Union[Path, str] = ".", *, config: Optional[Config] = None) -> Sc
         enabled_rules=active_codes,
         pending=pending,
         notice=notice,
+        rules_evaluated=rules_evaluated,
+        opt_in_off=opt_in_off,
     )

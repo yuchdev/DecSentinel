@@ -1,0 +1,1128 @@
+"""M6 origin probes with real planted modules (Milestone 0007 Story 04.0 Task 01).
+
+Threat model ``docs/security/threat-model-0007-extensions-2026-11-03.md`` T2/M6: with the gate open,
+a ``python:`` spec is refused before it executes when a ``sys.path`` entry lies inside the scan root,
+its project root or the current directory, or when its module (or any dotted parent, or a namespace
+search location, or an already imported ``sys.modules`` entry) lies there; and a run fails when an
+admitted extension imports a module from there. Every planted module writes a sentinel file when
+imported; the sentinel must never appear where the refusal precedes the import. The real import
+machinery is used; module directories are put on ``sys.path`` the way ``python -m``, pytest or
+``PYTHONPATH=.`` would. Tests marked "origin layer" disable the ``sys.path`` layer (as a custom finder
+or ``.pth`` hook would bypass it) to pin the per-module check behind it.
+"""
+
+import itertools
+import json
+import os
+import sys
+import types
+from collections.abc import Iterator, Sequence
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from docsentinel.config import Config
+from docsentinel.models import Document, ScanResult
+from docsentinel.reporting import render
+from docsentinel.telemetry import extensions
+from docsentinel.telemetry.extensions import ExtensionError, load_python_target, project_roots, resolve_extensions
+
+_COUNTER = itertools.count()
+
+
+@pytest.fixture
+def layout(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[str, Path]]:
+    """Return separate root, cwd and outside directories, only ``outside`` on ``sys.path``; chdir into cwd."""
+    dirs = {name: tmp_path_factory.mktemp(name) for name in ("root", "cwd", "outside")}
+    monkeypatch.chdir(dirs["cwd"])
+    monkeypatch.syspath_prepend(str(dirs["outside"]))
+    before = set(sys.modules)
+    yield dirs
+    for name in set(sys.modules) - before:
+        if name.startswith("ds_m6_"):
+            sys.modules.pop(name, None)
+
+
+@pytest.fixture
+def origin_layer(layout: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> dict[str, Path]:
+    """Put root and cwd on ``sys.path`` too, with the ``sys.path`` layer disabled (origin layer only)."""
+    for name in ("root", "cwd"):
+        monkeypatch.syspath_prepend(str(layout[name]))
+    monkeypatch.setattr(extensions, "_check_import_path", lambda boundary, cwd: None)
+    return layout
+
+
+def _unique(stem: str) -> str:
+    """Return a module name unique to this session."""
+    return f"ds_m6_{stem}_{next(_COUNTER)}"
+
+
+def _plant(directory: Path, relative: str, sentinel: Path, body: str = "") -> Path:
+    """Write a module that creates ``sentinel`` when imported."""
+    target = directory / relative
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
+        f"from pathlib import Path\nPath({str(sentinel)!r}).write_text('executed')\n{body}", encoding="utf-8"
+    )
+    return target
+
+
+def _load(spec: str, layout: dict[str, Path]) -> object:
+    """Run the shared helper with the gate open."""
+    return load_python_target(spec, allow_python=True, root=layout["root"], cwd=layout["cwd"])
+
+
+@pytest.mark.parametrize("layer", ["sys.path", "origin"])
+@pytest.mark.parametrize("where", ["root", "cwd"])
+def test_planted_module_in_root_or_cwd_is_refused_and_never_runs(
+    where: str, layer: str, layout: dict[str, Path], monkeypatch: pytest.MonkeyPatch
+):
+    """
+    [Integration] extension origin check: verifies an in-root or in-cwd module is refused unexecuted (M6).
+
+    Scenario:
+        Given ``evilmod.py`` planted in the scan root (or the cwd), importable from sys.path
+        When ``python:evilmod:make`` is loaded with the gate open
+        Then an ExtensionError is raised, the sentinel file does not exist and the module is not imported,
+        whether the sys.path layer or (with it disabled) the per-module origin layer refuses it.
+
+    Boundaries:
+        - Focus: import hijack through the checkout (T2)
+        - Fixtures/params: root and cwd placements; each refusal layer
+        - Scope: load_python_target with the real import machinery
+
+    On failure, first check:
+        - ``extensions._check_import_path``, ``_check_origins`` and ``_Boundary.refuses``
+    """
+    name = _unique("evilmod")
+    sentinel = layout["outside"] / f"{name}.sentinel"
+    _plant(layout[where], f"{name}.py", sentinel, "def make():\n    return None\n")
+    monkeypatch.syspath_prepend(str(layout[where]))
+    if layer == "origin":
+        monkeypatch.setattr(extensions, "_check_import_path", lambda boundary, cwd: None)
+
+    with pytest.raises(
+        ExtensionError, match="inside the scan root, its project root or the current directory"
+    ) as caught:
+        _load(f"python:{name}:make", layout)
+
+    assert not sentinel.exists()
+    assert name not in sys.modules
+    assert str(layout[where]) not in str(caught.value)
+
+
+def test_package_with_an_in_root_parent_is_refused_before_the_parent_runs(origin_layer: dict[str, Path]):
+    """
+    [Integration] extension origin check: verifies a dotted spec is refused when its parent package is in-root (M6).
+
+    Scenario:
+        Given a package whose ``__init__.py`` is in the root and whose leaf module is outside
+        When ``python:<pkg>.leaf:make`` is loaded with the gate open
+        Then it is refused and neither the parent nor the leaf ran.
+
+    Boundaries:
+        - Focus: every dotted prefix is checked, outermost first
+        - Fixtures/params: none
+        - Scope: load_python_target, origin layer
+
+    On failure, first check:
+        - the prefix loop in ``extensions._check_origins``
+    """
+    layout = origin_layer
+    name = _unique("pkg")
+    parent_sentinel = layout["outside"] / f"{name}.parent"
+    leaf_sentinel = layout["outside"] / f"{name}.leaf"
+    leaf_dir = layout["outside"] / "leafdir"
+    _plant(leaf_dir, "leaf.py", leaf_sentinel, "def make():\n    return None\n")
+    _plant(layout["root"], f"{name}/__init__.py", parent_sentinel, f"__path__.append({str(leaf_dir)!r})\n")
+
+    with pytest.raises(ExtensionError, match="inside the scan root"):
+        _load(f"python:{name}.leaf:make", layout)
+
+    assert not parent_sentinel.exists() and not leaf_sentinel.exists()
+
+
+def test_namespace_package_with_an_in_root_location_is_refused(origin_layer: dict[str, Path]):
+    """
+    [Integration] extension origin check: verifies a namespace package spanning the root is refused (M6).
+
+    Scenario:
+        Given a namespace package (no ``__init__``) with portions in the outside directory and in the root
+        When its outside leaf is loaded with the gate open
+        Then it is refused because one search location is inside the root, and the leaf never ran.
+
+    Boundaries:
+        - Focus: namespace packages have no origin; their search locations are checked
+        - Fixtures/params: none
+        - Scope: load_python_target, origin layer
+
+    On failure, first check:
+        - ``extensions._spec_locations`` submodule_search_locations handling
+    """
+    layout = origin_layer
+    name = _unique("ns")
+    sentinel = layout["outside"] / f"{name}.leaf"
+    (layout["root"] / name).mkdir()
+    _plant(layout["outside"], f"{name}/leaf.py", sentinel, "def make():\n    return None\n")
+
+    with pytest.raises(ExtensionError, match="inside the scan root"):
+        _load(f"python:{name}.leaf:make", layout)
+
+    assert not sentinel.exists()
+
+
+def test_preimported_in_root_module_is_refused(layout: dict[str, Path], monkeypatch: pytest.MonkeyPatch):
+    """
+    [Integration] extension origin check: verifies an in-root module already in sys.modules is refused (M6).
+
+    Scenario:
+        Given a module object whose ``__file__`` is in the root, already present in sys.modules
+        When it is loaded with the gate open
+        Then it is refused and its callable is never resolved or called.
+
+    Boundaries:
+        - Focus: sys.modules is checked, not just find_spec
+        - Fixtures/params: none
+        - Scope: load_python_target
+
+    On failure, first check:
+        - ``extensions._module_locations``
+    """
+    name = _unique("pre")
+    calls: list[int] = []
+    module = types.ModuleType(name)
+    module.__file__ = str(layout["root"] / f"{name}.py")
+    module.make = lambda: calls.append(1)  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, name, module)
+
+    with pytest.raises(ExtensionError, match="inside the scan root"):
+        _load(f"python:{name}:make", layout)
+    assert calls == []
+
+
+@pytest.mark.skipif(not hasattr(os, "symlink"), reason="symlinks are not available")
+def test_in_root_symlink_to_an_outside_module_is_refused(origin_layer: dict[str, Path]):
+    """
+    [Integration] extension origin check: verifies an in-root symlink to an outside file is still refused (M6).
+
+    Scenario:
+        Given ``<root>/<name>.py`` symlinked to a module file outside the root and cwd
+        When it is loaded with the gate open
+        Then it is refused (the location as written is in-root) and the target never ran.
+
+    Boundaries:
+        - Focus: the checkout choosing existing code through a symlink
+        - Fixtures/params: none
+        - Scope: load_python_target, origin layer
+
+    On failure, first check:
+        - the lexical candidate in ``extensions._Boundary.refuses``
+    """
+    layout = origin_layer
+    name = _unique("link")
+    sentinel = layout["outside"] / f"{name}.sentinel"
+    target = _plant(layout["outside"] / "hidden", "real.py", sentinel, "def make():\n    return None\n")
+    (layout["root"] / f"{name}.py").symlink_to(target)
+
+    with pytest.raises(ExtensionError, match="inside the scan root"):
+        _load(f"python:{name}:make", layout)
+    assert not sentinel.exists()
+
+
+def test_outside_module_loads_and_resolves_its_callable(layout: dict[str, Path]):
+    """
+    [Integration] extension origin check: verifies a module outside root and cwd loads through the helper (M5, M6).
+
+    Scenario:
+        Given an outside module defining ``factories.make`` returning an extension
+        When ``python:<module>:factories.make`` is resolved with the gate open
+        Then the extension loads and the sentinel shows the module ran exactly as expected.
+
+    Boundaries:
+        - Focus: normal case of the gate, origin check and dotted callable path
+        - Fixtures/params: none
+        - Scope: resolve_extensions
+
+    On failure, first check:
+        - the ``getattr`` loop in ``extensions.load_python_target``
+    """
+    name = _unique("good")
+    sentinel = layout["outside"] / f"{name}.sentinel"
+    body = (
+        "from types import SimpleNamespace\n"
+        "class factories:\n"
+        "    @staticmethod\n"
+        "    def make():\n"
+        "        return SimpleNamespace(name='good', provide_run=lambda model: {'ok': True})\n"
+    )
+    _plant(layout["outside"], f"{name}.py", sentinel, body)
+
+    loaded = resolve_extensions(
+        (f"python:{name}:factories.make",),
+        config=Config(),
+        allow_python=True,
+        root=layout["root"],
+        cwd=layout["cwd"],
+    )
+
+    assert loaded.names == ("good",)
+    assert sentinel.exists()
+
+
+def test_missing_module_and_missing_callable_are_bounded_errors(layout: dict[str, Path]):
+    """
+    [Integration] extension origin check: verifies a missing module or attribute is an ExtensionError without paths.
+
+    Scenario:
+        Given a spec naming a module that does not exist, and one naming a missing attribute of an outside module
+        When each is loaded with the gate open
+        Then each raises an ExtensionError that echoes no absolute path.
+
+    Boundaries:
+        - Focus: invalid input and M27 path hygiene
+        - Fixtures/params: none
+        - Scope: load_python_target
+
+    On failure, first check:
+        - error construction in ``extensions.load_python_target``
+    """
+    name = _unique("plain")
+    _plant(layout["outside"], f"{name}.py", layout["outside"] / f"{name}.sentinel")
+
+    with pytest.raises(ExtensionError, match="not found"):
+        _load(f"python:{_unique('absent')}:make", layout)
+    with pytest.raises(ExtensionError, match="callable not found") as caught:
+        _load(f"python:{name}:make", layout)
+    assert str(layout["outside"]) not in str(caught.value)
+
+
+# --------------------------------------------------------------------------- close-review regressions (2026-11-03)
+
+
+def _plant_extension(directory: Path, name: str, sentinel: Path, body: str):
+    """Write an outside extension module whose import, factory or hook runs ``body`` parts."""
+    _plant(directory, f"{name}.py", sentinel, body)
+
+
+@pytest.mark.parametrize("entry", ["", "."], ids=["empty-entry", "relative-entry"])
+def test_cwd_entry_on_sys_path_refuses_before_any_import(
+    entry: str, layout: dict[str, Path], monkeypatch: pytest.MonkeyPatch
+):
+    """
+    [Integration] extension origin check: verifies a '' or relative sys.path entry (python -m / -c) refuses (M6).
+
+    Scenario:
+        Given ``sys.path`` starting with ``''`` (or ``.``) as ``python -m`` and ``python -c`` set it,
+            an outside extension that does ``import <helper>`` and a ``<helper>.py`` planted in the cwd
+        When the outside extension is loaded with the gate open
+        Then an ExtensionError names sys.path, and neither the extension nor the planted helper ran.
+
+    Boundaries:
+        - Focus: close-review finding 1 (transitive import of a planted cwd module)
+        - Fixtures/params: the empty and the relative spelling of the cwd entry
+        - Scope: load_python_target with the real import machinery
+
+    On failure, first check:
+        - ``extensions._check_import_path`` handling of ``''`` and relative entries
+    """
+    helper = _unique("csvlike")
+    ext = _unique("goodext")
+    helper_sentinel = layout["outside"] / f"{helper}.sentinel"
+    ext_sentinel = layout["outside"] / f"{ext}.sentinel"
+    _plant(layout["cwd"], f"{helper}.py", helper_sentinel)
+    _plant_extension(layout["outside"], ext, ext_sentinel, f"import {helper}\ndef make():\n    return None\n")
+    monkeypatch.syspath_prepend(entry)
+
+    with pytest.raises(ExtensionError, match=r"sys\.path"):
+        _load(f"python:{ext}:make", layout)
+
+    assert not helper_sentinel.exists() and not ext_sentinel.exists()
+
+
+def test_checkout_on_pythonpath_after_an_outside_extension_is_refused(
+    layout: dict[str, Path], monkeypatch: pytest.MonkeyPatch
+):
+    """
+    [Integration] extension origin check: verifies PYTHONPATH=<out>:<repo> refuses a transitive import (M6).
+
+    Scenario:
+        Given ``sys.path`` = [outside, root] (``PYTHONPATH=<out>:<repo>``), an outside extension that imports
+            ``helperlib_x`` and ``helperlib_x.py`` planted in the root
+        When the outside extension is resolved with the gate open
+        Then the run is refused before anything is imported and no sentinel exists.
+
+    Boundaries:
+        - Focus: close-review finding 1 (auditor repro c8b-transitive-pp)
+        - Fixtures/params: none
+        - Scope: resolve_extensions
+
+    On failure, first check:
+        - ``extensions._check_import_path``
+    """
+    helper = _unique("helperlib_x")
+    ext = _unique("goodext")
+    helper_sentinel = layout["outside"] / f"{helper}.sentinel"
+    ext_sentinel = layout["outside"] / f"{ext}.sentinel"
+    _plant(layout["root"], f"{helper}.py", helper_sentinel)
+    _plant_extension(layout["outside"], ext, ext_sentinel, f"import {helper}\ndef make():\n    return None\n")
+    monkeypatch.syspath_prepend(str(layout["root"]))
+    monkeypatch.syspath_prepend(str(layout["outside"]))
+
+    with pytest.raises(ExtensionError, match=r"sys\.path"):
+        resolve_extensions(
+            (f"python:{ext}:make",), config=Config(), allow_python=True, root=layout["root"], cwd=layout["cwd"]
+        )
+
+    assert not helper_sentinel.exists() and not ext_sentinel.exists()
+
+
+def _sneaky_body(root: Path, helper: str, stage: str) -> str:
+    """Return an outside extension that adds ``root`` to sys.path and imports ``helper`` at ``stage``."""
+    sneak = f"    import sys\n    sys.path.insert(0, {str(root)!r})\n    import {helper}\n"
+    return (
+        "from types import SimpleNamespace\n"
+        f"def _sneak():\n{sneak}"
+        + ("_sneak()\n" if stage == "import" else "")
+        + "def _run(model):\n"
+        + ("    _sneak()\n" if stage == "hook" else "")
+        + "    return {'ok': True}\n"
+        + "def make():\n"
+        + ("    _sneak()\n" if stage == "factory" else "")
+        + "    return SimpleNamespace(name='sneaky', provide_run=_run)\n"
+    )
+
+
+_DOC = ScanResult(
+    profile="fast", documents=(Document("a.md", 1),), findings=(), enabled_rules=(), pending=(), notice=""
+)
+
+
+@pytest.mark.parametrize("stage", ["import", "factory", "hook"])
+def test_module_imported_from_the_checkout_during_the_run_fails_the_run(
+    stage: str, layout: dict[str, Path], monkeypatch: pytest.MonkeyPatch
+):
+    """
+    [Integration] extension origin check: verifies a planted module imported by an admitted extension fails the run.
+
+    Scenario:
+        Given an outside extension that, at import time, in its factory or in its run hook, puts the root on
+            sys.path itself and imports a helper planted there
+        When the report is rendered with the gate open
+        Then an ExtensionError naming the helper (never its path) is raised and no report is produced.
+
+    Boundaries:
+        - Focus: close-review finding 1 (the sys.modules before/after comparison)
+        - Fixtures/params: the import, factory and hook stages
+        - Scope: reporting.render over resolve_extensions, the hooks and the ModuleWatch
+
+    On failure, first check:
+        - ``extensions.ModuleWatch.check`` and its call sites (helper, resolve_extensions, hooks, render)
+    """
+    helper = _unique("planted")
+    ext = _unique("sneaky")
+    _plant(layout["root"], f"{helper}.py", layout["outside"] / f"{helper}.sentinel")
+    _plant_extension(
+        layout["outside"], ext, layout["outside"] / f"{ext}.sentinel", _sneaky_body(layout["root"], helper, stage)
+    )
+    monkeypatch.setattr(sys, "path", list(sys.path))
+
+    with pytest.raises(ExtensionError, match=f"module {helper} was imported during the run") as caught:
+        render(_DOC, extensions=(f"python:{ext}:make",), allow_python_extensions=True, root=layout["root"])
+
+    assert str(layout["root"]) not in str(caught.value)
+
+
+def test_extension_importing_only_outside_modules_renders(layout: dict[str, Path]):
+    """
+    [Integration] extension origin check: verifies an extension importing stdlib and outside modules is accepted.
+
+    Scenario:
+        Given an outside extension that imports ``csv`` and an outside helper at import time and in its hook
+        When the report is rendered with the gate open
+        Then the render succeeds (the ModuleWatch accepts modules outside the boundary).
+
+    Boundaries:
+        - Focus: normal case of finding 1's after-the-fact check (no false positive)
+        - Fixtures/params: none
+        - Scope: reporting.render
+
+    On failure, first check:
+        - ``extensions.ModuleWatch.check`` and ``_Boundary.refuses``
+    """
+    helper = _unique("outhelper")
+    ext = _unique("tidy")
+    _plant(layout["outside"], f"{helper}.py", layout["outside"] / f"{helper}.sentinel")
+    body = (
+        "import csv\nfrom types import SimpleNamespace\n"
+        f"def _run(model):\n    import {helper}\n    return {{'ok': True}}\n"
+        "def make():\n    return SimpleNamespace(name='tidy', provide_run=_run)\n"
+    )
+    _plant_extension(layout["outside"], ext, layout["outside"] / f"{ext}.sentinel", body)
+
+    report = render(_DOC, "json", extensions=(f"python:{ext}:make",), allow_python_extensions=True, root=layout["root"])
+
+    assert '"documents"' in report
+
+
+def _checkout(layout: dict[str, Path], marker: str) -> tuple[Path, Path]:
+    """Make ``root`` a checkout with ``marker`` and a ``docs/`` subdirectory; return (checkout, docs)."""
+    checkout = layout["root"]
+    if marker == ".git":
+        (checkout / ".git").mkdir()
+    else:
+        (checkout / marker).write_text("", encoding="utf-8")
+    docs = checkout / "docs" / "guide"
+    docs.mkdir(parents=True)
+    return checkout, docs
+
+
+@pytest.mark.parametrize("marker", [".git", "docsentinel.toml", "doc_sentinel.toml", "pyproject.toml"])
+def test_scanning_a_subdirectory_still_covers_the_checkout(
+    marker: str, layout: dict[str, Path], monkeypatch: pytest.MonkeyPatch
+):
+    """
+    [Integration] extension origin check: verifies the project root of a subdirectory scan is an anchor (M6).
+
+    Scenario:
+        Given a checkout marked by ``marker`` with ``evilmod.py`` at its top, put on sys.path
+            (``PYTHONPATH=<repo>``), the cwd elsewhere, and the scan root ``<repo>/docs/guide``
+        When ``python:evilmod:make`` is loaded with the gate open
+        Then it is refused and evilmod never ran, by the sys.path layer and by the origin layer alone.
+
+    Boundaries:
+        - Focus: close-review finding 2 (auditor repro: scan <repo>/docs from elsewhere)
+        - Fixtures/params: each project-root marker
+        - Scope: load_python_target
+
+    On failure, first check:
+        - ``extensions.project_roots`` and ``PROJECT_ROOT_MARKERS``
+    """
+    checkout, docs = _checkout(layout, marker)
+    name = _unique("evilmod")
+    sentinel = layout["outside"] / f"{name}.sentinel"
+    _plant(checkout, f"{name}.py", sentinel, "def make():\n    return None\n")
+    monkeypatch.syspath_prepend(str(checkout))
+
+    with pytest.raises(ExtensionError, match=r"sys\.path"):
+        load_python_target(f"python:{name}:make", allow_python=True, root=docs, cwd=layout["cwd"])
+    monkeypatch.setattr(extensions, "_check_import_path", lambda boundary, cwd: None)
+    with pytest.raises(ExtensionError, match="its project root"):
+        load_python_target(f"python:{name}:make", allow_python=True, root=docs, cwd=layout["cwd"])
+
+    assert not sentinel.exists()
+
+
+def test_project_roots_are_every_marked_ancestor(layout: dict[str, Path]):
+    """
+    [Integration] extension origin check: verifies project_roots keeps every marked ancestor, not the nearest (M6).
+
+    Scenario:
+        Given an outer directory with ``.git`` holding an inner one with ``pyproject.toml`` and a ``docs`` below it,
+            and a separate unmarked directory
+        When project_roots is asked for ``inner/docs``, ``inner`` and the unmarked directory
+        Then ``inner/docs`` and ``inner`` both yield ``inner`` and ``outer`` (the scan root itself counts), and the
+            unmarked tree yields nothing.
+
+    Boundaries:
+        - Focus: re-verification finding N1 (amended M6: every marked ancestor); normal and empty cases
+        - Fixtures/params: none
+        - Scope: project_roots
+
+    On failure, first check:
+        - the ancestor walk in ``extensions.project_roots`` (it must not stop at the first marker)
+    """
+    outer = layout["root"]
+    (outer / ".git").mkdir()
+    inner = outer / "inner"
+    (inner / "docs").mkdir(parents=True)
+    (inner / "pyproject.toml").write_text("", encoding="utf-8")
+    expected = {os.path.realpath(inner), os.path.realpath(outer)}
+
+    assert {os.path.realpath(p) for p in project_roots(inner / "docs")} == expected
+    assert {os.path.realpath(p) for p in project_roots(inner)} == expected
+    assert project_roots(layout["outside"]) == ()
+
+
+@pytest.mark.parametrize("planted", ["empty-git-file", "dangling-git-link", "pyproject.toml"])
+def test_a_marker_planted_below_the_checkout_never_drops_the_checkout(planted: str, layout: dict[str, Path]):
+    """
+    [Integration] extension origin check: verifies a repo-controlled marker under docs/ cannot shrink the boundary.
+
+    Scenario:
+        Given a checkout marked by a ``.git`` directory whose ``docs/`` holds a planted marker (an empty ``.git``
+            file, a dangling ``.git`` link or a ``pyproject.toml``)
+        When project_roots is asked for ``<checkout>/docs``
+        Then both ``docs`` and the checkout are project roots.
+
+    Boundaries:
+        - Focus: re-verification finding N1 (nearest-marker boundary shrink)
+        - Fixtures/params: one planted marker kind per case
+        - Scope: project_roots
+
+    On failure, first check:
+        - ``extensions.project_roots`` and ``_has_project_marker``
+    """
+    checkout = layout["root"]
+    (checkout / ".git").mkdir()
+    docs = checkout / "docs"
+    docs.mkdir()
+    if planted == "empty-git-file":
+        (docs / ".git").write_text("", encoding="utf-8")
+    elif planted == "dangling-git-link":
+        if not hasattr(os, "symlink"):
+            pytest.skip("symlinks are not available")
+        os.symlink(checkout / "does-not-exist", docs / ".git")
+    else:
+        (docs / "pyproject.toml").write_text("", encoding="utf-8")
+
+    found = {os.path.realpath(p) for p in project_roots(docs)}
+
+    assert found == {os.path.realpath(docs), os.path.realpath(checkout)}
+
+
+def test_an_implausibly_deep_scan_root_fails_closed(layout: dict[str, Path], monkeypatch: pytest.MonkeyPatch):
+    """
+    [Integration] extension origin check: verifies project_roots refuses rather than stops early past its bound.
+
+    Scenario:
+        Given an ancestor bound lowered to 2 and a scan root nested deeper than that
+        When project_roots walks it
+        Then an ExtensionError is raised instead of a partial (possibly shrunken) result.
+
+    Boundaries:
+        - Focus: re-verification finding N1 edge case (bounded walk to the filesystem root fails closed)
+        - Fixtures/params: none
+        - Scope: project_roots
+
+    On failure, first check:
+        - the ``for ... else`` of the ancestor walk in ``extensions.project_roots``
+    """
+    monkeypatch.setattr(extensions, "_MAX_ANCESTORS", 2)
+
+    with pytest.raises(ExtensionError, match="implausibly deep"):
+        project_roots(layout["root"])
+
+
+def test_sys_modules_entry_without_a_location_is_refused(layout: dict[str, Path], monkeypatch: pytest.MonkeyPatch):
+    """
+    [Integration] extension origin check: verifies a locationless sys.modules entry is refused (M6, finding 7).
+
+    Scenario:
+        Given a module object in sys.modules with no ``__spec__``, ``__file__`` or ``__path__`` (an in-root module
+            that dropped its location)
+        When it is loaded with the gate open
+        Then it is refused and its callable is never resolved.
+
+    Boundaries:
+        - Focus: close-review finding 7 (auditor probe p06 ghostmod)
+        - Fixtures/params: none
+        - Scope: load_python_target
+
+    On failure, first check:
+        - ``extensions._refuse_module`` and ``_is_fileless_by_design``
+    """
+    name = _unique("ghost")
+    calls: list[int] = []
+    module = types.ModuleType(name)
+    module.make = lambda: calls.append(1)  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, name, module)
+
+    with pytest.raises(ExtensionError, match="no file location"):
+        _load(f"python:{name}:make", layout)
+    assert calls == []
+
+
+def test_builtin_module_without_a_file_is_accepted(layout: dict[str, Path]):
+    """
+    [Integration] extension origin check: verifies a builtin module (no file by design) still resolves (M6).
+
+    Scenario:
+        Given the builtin ``sys`` module, which has no file location
+        When ``python:sys:getrecursionlimit`` is loaded with the gate open
+        Then the callable is returned.
+
+    Boundaries:
+        - Focus: edge case of finding 7 (builtin/frozen exemption)
+        - Fixtures/params: none
+        - Scope: load_python_target
+
+    On failure, first check:
+        - ``extensions._is_fileless_by_design``
+    """
+    assert _load("python:sys:getrecursionlimit", layout) is sys.getrecursionlimit
+
+
+# --------------------------------------------------------------------------- third re-verification F1/F2 (2026-11-03)
+
+
+def test_unresolved_root_spelling_keeps_a_linked_out_checkout_in_the_boundary(
+    layout: dict[str, Path], tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+):
+    """
+    [Integration] extension origin check: verifies origin_roots anchors the checkout behind an out-pointing link (M6, F1).
+
+    Scenario:
+        Given a git checkout whose ``docs`` is a symlink to a directory outside it, ``<checkout>/src`` on sys.path
+            holding an extension that writes a sentinel on import, and the resolved (outside) docs as the root
+        When the extension is resolved with ``origin_roots=(<checkout>/docs,)``, the unresolved spelling
+        Then it is refused naming sys.path and the planted extension never ran.
+
+    Boundaries:
+        - Focus: third re-verification finding F1 (auditor fixture w14), library level
+        - Fixtures/params: none
+        - Scope: resolve_extensions
+
+    On failure, first check:
+        - ``extensions._Boundary.of`` (``origin_roots`` and their project roots)
+    """
+    checkout = layout["root"]
+    (checkout / ".git").mkdir()
+    real_docs = tmp_path_factory.mktemp("linked") / "docs"
+    real_docs.mkdir()
+    os.symlink(real_docs, checkout / "docs")
+    name = _unique("company_ext")
+    sentinel = layout["outside"] / f"{name}.sentinel"
+    _plant(checkout / "src", f"{name}.py", sentinel, "def make():\n    return None\n")
+    monkeypatch.syspath_prepend(str(checkout / "src"))
+
+    with pytest.raises(ExtensionError, match=r"sys\.path"):
+        resolve_extensions(
+            (f"python:{name}:make",),
+            config=Config(),
+            allow_python=True,
+            root=(checkout / "docs").resolve(),
+            cwd=layout["cwd"],
+            origin_roots=(checkout / "docs",),
+        )
+    assert not sentinel.exists()
+
+
+@pytest.mark.parametrize("origin_roots", ["/a/path", b"/a/path", Path("/a/path"), [1], [""]])
+def test_origin_roots_must_be_a_sequence_of_paths(origin_roots: object, layout: dict[str, Path]):
+    """
+    [Integration] extension origin check: verifies origin_roots refuses a bare path or a non-path entry (M6, F1).
+
+    Scenario:
+        Given ``origin_roots`` passed as one ``str``/``bytes``/``Path`` (not a sequence), or a list holding an int
+            or an empty string
+        When resolve_extensions runs with only a builtin-free, empty spec list
+        Then an ExtensionError is raised before anything is resolved.
+
+    Boundaries:
+        - Focus: invalid input of the new ``origin_roots`` parameter
+        - Fixtures/params: one malformed value per case
+        - Scope: resolve_extensions
+
+    On failure, first check:
+        - ``extensions._origin_paths``
+    """
+    with pytest.raises(ExtensionError, match="origin_roots"):
+        resolve_extensions(
+            (),
+            config=Config(),
+            allow_python=True,
+            root=layout["root"],
+            cwd=layout["cwd"],
+            origin_roots=origin_roots,  # type: ignore[arg-type]
+        )
+
+
+class _LyingSequence(Sequence[str]):
+    """A sequence whose ``__len__`` claims one entry while iteration never ends."""
+
+    def __len__(self) -> int:
+        """Claim a single entry."""
+        return 1
+
+    def __getitem__(self, index: Any) -> str:
+        """Return the same path for every index."""
+        return "/a/path"
+
+    def __iter__(self) -> Iterator[str]:
+        """Yield the same path forever."""
+        return itertools.repeat("/a/path")
+
+
+class _RaisingPath:
+    """An ``os.PathLike`` whose ``__fspath__`` raises."""
+
+    def __fspath__(self) -> str:
+        """Fail the conversion."""
+        raise RuntimeError("no path for you")
+
+
+@pytest.mark.parametrize(
+    ("origin_roots", "message"),
+    [
+        (_LyingSequence(), "too many origin_roots"),
+        ([_RaisingPath()], "must be a sequence of paths"),
+        (["/tmp/a\0b"], "NUL character"),
+        ([Path("/tmp/a\0b")], "NUL character"),
+    ],
+    ids=["lying-len", "raising-fspath", "nul-str", "nul-path"],
+)
+def test_origin_roots_cap_and_fspath_cannot_be_bypassed(origin_roots: object, message: str, layout: dict[str, Path]):
+    """
+    [Integration] extension origin check: verifies a lying __len__ or a raising __fspath__ is a bounded ExtensionError (M6, I1).
+
+    Scenario:
+        Given ``origin_roots`` as a Sequence whose ``__len__`` says 1 but whose iterator never ends, a list
+            holding a PathLike whose ``__fspath__`` raises RuntimeError, or a ``str``/``Path`` entry with a NUL
+        When resolve_extensions runs with an empty spec list
+        Then an ExtensionError (never a hang, a RuntimeError or the ValueError ``os.lstat`` raises for a NUL)
+            is raised before anything is resolved.
+
+    Boundaries:
+        - Focus: review finding I1 (the 64-entry cap counts iterated entries, not ``len()``)
+        - Fixtures/params: one hostile value per case
+        - Scope: resolve_extensions
+
+    On failure, first check:
+        - ``extensions._origin_paths`` (``islice`` over ``MAX + 1`` entries, ``os.fspath`` in a try)
+    """
+    with pytest.raises(ExtensionError, match=message):
+        resolve_extensions(
+            (),
+            config=Config(),
+            allow_python=True,
+            root=layout["root"],
+            cwd=layout["cwd"],
+            origin_roots=origin_roots,  # type: ignore[arg-type]
+        )
+
+
+def test_nul_origin_root_is_an_extension_error_before_any_import(layout: dict[str, Path]):
+    """
+    [Integration] extension origin check: verifies a NUL origin_roots entry on the library path is an ExtensionError.
+
+    Scenario:
+        Given a planted extension outside root and cwd that writes a sentinel on import, and an
+            ``origin_roots`` entry holding a NUL character
+        When ``load_python_target`` runs with the gate open
+        Then an ExtensionError naming the NUL (not a ValueError from ``os.lstat``) is raised,
+            and the planted module never ran.
+
+    Boundaries:
+        - Focus: closure threat model follow-up (c): the library error contract is ExtensionError only
+        - Fixtures/params: one planted module in ``outside``
+        - Scope: load_python_target
+
+    On failure, first check:
+        - the NUL check in ``extensions._origin_paths``
+    """
+    name = _unique("nul")
+    sentinel = layout["outside"] / f"{name}.ran"
+    _plant(layout["outside"], f"{name}.py", sentinel, "def make():\n    return None\n")
+
+    with pytest.raises(ExtensionError, match="NUL character"):
+        load_python_target(
+            f"python:{name}:make",
+            allow_python=True,
+            root=layout["root"],
+            cwd=layout["cwd"],
+            origin_roots=(str(layout["root"]) + "\0x",),
+        )
+
+    assert not sentinel.exists()
+    assert name not in sys.modules
+
+
+@pytest.mark.skipif(not hasattr(os, "symlink"), reason="symlinks are not available")
+def test_link_to_link_root_keeps_the_intermediate_checkout_in_the_boundary(
+    layout: dict[str, Path], tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+):
+    """
+    [Integration] extension origin check: verifies every hop of a symlinked root is anchored (M6, L1).
+
+    Scenario:
+        Given a git checkout whose ``docs`` is a symlink to a directory outside it, ``<checkout>/src`` on sys.path
+            holding an extension that writes a sentinel on import, and ``<elsewhere>/rootlink -> <checkout>/docs``
+        When the extension is resolved with ``origin_roots=(<elsewhere>/rootlink,)`` and the resolved docs as root
+        Then it is refused naming sys.path and the planted extension never ran.
+
+    Boundaries:
+        - Focus: review finding L1 (neither the given nor the canonical spelling lies in the checkout)
+        - Fixtures/params: none
+        - Scope: resolve_extensions
+
+    On failure, first check:
+        - ``extensions._link_chain`` and its use in ``extensions._Boundary.of``
+    """
+    checkout = layout["root"]
+    (checkout / ".git").mkdir()
+    real_docs = tmp_path_factory.mktemp("linked") / "docs"
+    real_docs.mkdir()
+    os.symlink(real_docs, checkout / "docs")
+    elsewhere = tmp_path_factory.mktemp("elsewhere")
+    os.symlink(checkout / "docs", elsewhere / "rootlink")
+    name = _unique("company_ext")
+    sentinel = layout["outside"] / f"{name}.sentinel"
+    _plant(checkout / "src", f"{name}.py", sentinel, "def make():\n    return None\n")
+    monkeypatch.syspath_prepend(str(checkout / "src"))
+
+    with pytest.raises(ExtensionError, match=r"sys\.path"):
+        resolve_extensions(
+            (f"python:{name}:make",),
+            config=Config(),
+            allow_python=True,
+            root=real_docs.resolve(),
+            cwd=layout["cwd"],
+            origin_roots=(elsewhere / "rootlink",),
+        )
+    assert not sentinel.exists()
+
+
+@pytest.mark.skipif(not hasattr(os, "symlink"), reason="symlinks are not available")
+def test_dotdot_hop_across_a_symlink_anchors_the_kernel_spelling(
+    layout: dict[str, Path], tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+):
+    """
+    [Integration] extension origin check: verifies a ``..`` hop across a symlink anchors the kernel's path (M6, L-a).
+
+    Scenario:
+        Given ``el/lnk -> deep/x`` and the root spelling ``el/rl -> lnk/../C/docs``, where ``deep/C`` is a git
+            checkout whose ``docs`` links out to ``out/docs`` and whose ``src/`` (on sys.path) holds an extension that
+            writes a sentinel on import (auditor fixture r5f/dotdot)
+        When the extension is resolved with ``origin_roots=(el/rl,)`` and the canonical ``out/docs`` as root
+        Then ``_link_chain`` holds ``deep/C/docs`` (the kernel's hop, not the lexical ``el/C/docs``), the extension
+            is refused naming sys.path and the planted module never ran.
+
+    Boundaries:
+        - Focus: security follow-up L-a (lexical ``..`` normalization disagreed with the kernel)
+        - Fixtures/params: none
+        - Scope: ``extensions._link_chain``, resolve_extensions
+
+    On failure, first check:
+        - the ``kernel`` spelling in ``extensions._link_chain``
+    """
+    base = tmp_path_factory.mktemp("dotdot").resolve()
+    for directory in ("el", "deep/x", "deep/C/.git", "deep/C/src", "out/docs"):
+        (base / directory).mkdir(parents=True)
+    os.symlink(base / "deep" / "x", base / "el" / "lnk")
+    os.symlink("lnk/../C/docs", base / "el" / "rl")
+    os.symlink(base / "out" / "docs", base / "deep" / "C" / "docs")
+    name = _unique("dotdot_ext")
+    sentinel = layout["outside"] / f"{name}.sentinel"
+    _plant(base / "deep" / "C" / "src", f"{name}.py", sentinel, "def make():\n    return None\n")
+    monkeypatch.syspath_prepend(str(base / "deep" / "C" / "src"))
+
+    chain = extensions._link_chain(str(base / "el" / "rl"))
+
+    assert str(base / "deep" / "C" / "docs") in chain
+    assert str(base / "out" / "docs") in chain
+    with pytest.raises(ExtensionError, match=r"sys\.path"):
+        resolve_extensions(
+            (f"python:{name}:make",),
+            config=Config(),
+            allow_python=True,
+            root=(base / "el" / "rl").resolve(),
+            cwd=layout["cwd"],
+            origin_roots=(base / "el" / "rl",),
+        )
+    assert not sentinel.exists()
+
+
+@pytest.mark.skipif(not hasattr(os, "symlink"), reason="symlinks are not available")
+def test_symlink_loop_as_origin_root_fails_closed(layout: dict[str, Path], tmp_path_factory: pytest.TempPathFactory):
+    """
+    [Integration] extension origin check: verifies a symlink loop as a root spelling is refused, not walked forever (M6, L1).
+
+    Scenario:
+        Given ``<dir>/a -> <dir>/b`` and ``<dir>/b -> <dir>/a``
+        When resolve_extensions runs with ``origin_roots=(<dir>/a,)`` and an empty spec list
+        Then an ExtensionError naming the implausibly long symlink chain is raised.
+
+    Boundaries:
+        - Focus: the hop bound of the L1 link-chain walk (fail closed rather than stop early)
+        - Fixtures/params: none
+        - Scope: resolve_extensions
+
+    On failure, first check:
+        - ``extensions._link_chain`` (``_MAX_LINK_HOPS``)
+    """
+    looped = tmp_path_factory.mktemp("loop")
+    os.symlink(looped / "b", looped / "a")
+    os.symlink(looped / "a", looped / "b")
+
+    with pytest.raises(ExtensionError, match="symlink chain"):
+        resolve_extensions(
+            ("python:ds_m6_never_imported:make",),
+            config=Config(),
+            allow_python=True,
+            root=layout["root"],
+            cwd=layout["cwd"],
+            origin_roots=(looped / "a",),
+        )
+
+
+def _filter_template(directory: Path, extension: str) -> Path:
+    """Write a terminal text template calling ``ext.<extension>.f`` twice."""
+    line = {"type": "line", "text": f"{{profile|ext.{extension}.f|neutralize}}", "variables_used": ["profile"]}
+    raw = {
+        "template_version": 1,
+        "name": "filter-twice",
+        "type": "text",
+        "requires_extensions": [extension],
+        "output": {"sink": "terminal"},
+        "lines": [line, line],
+    }
+    path = directory / "filter-twice.json"
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    return path
+
+
+def test_filter_putting_the_root_on_sys_path_fails_before_its_next_call(
+    layout: dict[str, Path], monkeypatch: pytest.MonkeyPatch
+):
+    """
+    [Integration] extension origin check: verifies every extension filter call re-checks sys.path first (M6, F2).
+
+    Scenario:
+        Given an outside extension whose filter, on its first call, inserts the scan root into sys.path and, on its
+            second call, imports a helper planted there (auditor repro r9 ``filter_plant``)
+        When a template calling the filter twice is rendered with the gate open
+        Then an ExtensionError (not a filter TemplateError) names sys.path, and the helper never ran.
+
+    Boundaries:
+        - Focus: third re-verification finding F2 (filters ran without the prevention check)
+        - Fixtures/params: none
+        - Scope: reporting.render over BoundFilter.__call__ and its guard
+
+    On failure, first check:
+        - ``BoundFilter.guard`` bound in ``extensions._registry`` and the ``except ExtensionError`` in
+          ``engine.render_template``
+    """
+    helper = _unique("scrub")
+    ext = _unique("filterplant")
+    helper_sentinel = layout["outside"] / f"{helper}.sentinel"
+    _plant(layout["root"], f"{helper}.py", helper_sentinel)
+    body = (
+        "import sys\n"
+        "from docsentinel.telemetry.extensions import ExtensionFilter\n"
+        "calls = []\n"
+        "def _f(value):\n"
+        "    calls.append(1)\n"
+        "    if len(calls) == 1:\n"
+        f"        sys.path.insert(0, {str(layout['root'])!r})\n"
+        "    else:\n"
+        f"        import {helper}\n"
+        "    return 'x'\n"
+        "class E:\n"
+        "    name = 'fp'\n"
+        "    def filters(self):\n"
+        "        return {'ext.fp.f': ExtensionFilter(_f, 0, frozenset({'scalar'}))}\n"
+        "def make():\n    return E()\n"
+    )
+    _plant_extension(layout["outside"], ext, layout["outside"] / f"{ext}.sentinel", body)
+    template = _filter_template(layout["outside"], "fp")
+    monkeypatch.setattr(sys, "path", list(sys.path))
+
+    with pytest.raises(ExtensionError, match=r"sys\.path") as caught:
+        render(
+            _DOC,
+            template=str(template),
+            extensions=(f"python:{ext}:make",),
+            allow_python_extensions=True,
+            root=layout["root"],
+        )
+
+    assert type(caught.value) is ExtensionError
+    assert not helper_sentinel.exists()
+    assert helper not in sys.modules
+
+
+def test_factory_putting_the_root_on_sys_path_fails_before_its_filters_hook(
+    layout: dict[str, Path], monkeypatch: pytest.MonkeyPatch
+):
+    """
+    [Integration] extension origin check: verifies sys.path is checked between the factory and filters() (M6, F2).
+
+    Scenario:
+        Given an outside extension whose factory inserts the scan root into sys.path and whose ``filters()`` hook
+            imports a helper planted there
+        When the extension is resolved with the gate open
+        Then an ExtensionError names sys.path and neither ``filters()`` nor the helper ran.
+
+    Boundaries:
+        - Focus: third re-verification finding F2 (factory -> _admit gap)
+        - Fixtures/params: none
+        - Scope: resolve_extensions
+
+    On failure, first check:
+        - the ``watch.check()`` between the factory call and ``_admit`` in ``extensions.resolve_extensions``
+    """
+    helper = _unique("scrub")
+    ext = _unique("factoryplant")
+    helper_sentinel = layout["outside"] / f"{helper}.sentinel"
+    filters_sentinel = layout["outside"] / f"{ext}.filters"
+    _plant(layout["root"], f"{helper}.py", helper_sentinel)
+    body = (
+        "import pathlib, sys\n"
+        "class E:\n"
+        "    name = 'fp'\n"
+        "    def filters(self):\n"
+        f"        pathlib.Path({str(filters_sentinel)!r}).write_text('x')\n"
+        f"        import {helper}\n"
+        "        return {}\n"
+        "def make():\n"
+        f"    sys.path.insert(0, {str(layout['root'])!r})\n"
+        "    return E()\n"
+    )
+    _plant_extension(layout["outside"], ext, layout["outside"] / f"{ext}.sentinel", body)
+    monkeypatch.setattr(sys, "path", list(sys.path))
+
+    with pytest.raises(ExtensionError, match=r"sys\.path"):
+        resolve_extensions(
+            (f"python:{ext}:make",), config=Config(), allow_python=True, root=layout["root"], cwd=layout["cwd"]
+        )
+
+    assert not filters_sentinel.exists() and not helper_sentinel.exists()
+
+
+def test_keyboard_interrupt_subclass_cannot_skip_the_event_path_module_check(
+    layout: dict[str, Path], monkeypatch: pytest.MonkeyPatch
+):
+    """
+    [Integration] extension origin check: verifies a KeyboardInterrupt subclass cannot escape the final M6 check (F4).
+
+    Scenario:
+        Given an outside extension whose problem hook puts the root on sys.path, imports a helper planted there,
+            removes the entry again and raises a KeyboardInterrupt subclass (auditor repro r9 ``ev_ki``)
+        When the event guard runs the hook
+        Then the interrupt is not propagated: the hook failure is a warning and the module check refuses the run
+            with an ExtensionError naming the helper.
+
+    Boundaries:
+        - Focus: third re-verification finding F4 (event path); detection after the fact is residual R3
+        - Fixtures/params: none
+        - Scope: EventHookGuard over a real resolve_extensions registry
+
+    On failure, first check:
+        - ``extensions._call`` (only an exact KeyboardInterrupt propagates)
+    """
+    helper = _unique("honest")
+    ext = _unique("evki")
+    _plant(layout["root"], f"{helper}.py", layout["outside"] / f"{helper}.sentinel")
+    body = (
+        "import sys\n"
+        "class KI(KeyboardInterrupt):\n    pass\n"
+        "class E:\n"
+        "    name = 'evki'\n"
+        "    def provide_problem(self, p, d, m):\n"
+        f"        sys.path.insert(0, {str(layout['root'])!r})\n"
+        f"        import {helper}\n"
+        f"        sys.path.remove({str(layout['root'])!r})\n"
+        "        raise KI()\n"
+        "def make():\n    return E()\n"
+    )
+    _plant_extension(layout["outside"], ext, layout["outside"] / f"{ext}.sentinel", body)
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    loaded = resolve_extensions(
+        (f"python:{ext}:make",), config=Config(), allow_python=True, root=layout["root"], cwd=layout["cwd"]
+    )
+    warnings: list[str] = []
+
+    with pytest.raises(ExtensionError, match=f"module {helper} was imported during the run"):
+        extensions.EventHookGuard(loaded, warn=warnings.append).problem_ext({"rule": "DS101"}, {"path": "a.md"}, {})
+    assert len(warnings) == 1 and "provide_problem failed: KI" in warnings[0]

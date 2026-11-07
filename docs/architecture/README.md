@@ -6,6 +6,7 @@
 - [Configuration](#configuration)
 - [Rule codes and selection](#rule-codes-and-selection)
 - [Policy options (Milestone 0005)](#policy-options-milestone-0005)
+- [Report options (Milestone 0007)](#report-options-milestone-0007)
 - [Fast profile rules](#fast-profile-rules)
 - [Opt-in policy rules](#opt-in-policy-rules)
 - [Standard profile](#standard-profile)
@@ -21,11 +22,32 @@ Every consumer (CLI, Python library, pytest plugin) goes through the same engine
 | `config`         | Validates local TOML input and builds the effective `Config`.                                     |
 | `discovery`      | Inventories Markdown files in a stable order.                                                     |
 | `engine.scan`    | Orchestrates the registered analyzers and applies baseline filters.                               |
-| `reporting`      | Presents the shared `ScanResult` contract for the CLI and Python clients.                         |
+| `reporting`      | `render()`: resolves a report template and renders the shared `ScanResult` through it.            |
+| `telemetry`      | Fault events, finding classification (`classify`) and the report context (`ReportModel`).         |
 | pytest plugin    | Opt-in; calls the same engine.                                                                    |
 
 `engine.scan` forwards the effective `Config` to any analyzer that declares a third `config`
 parameter. The two-argument `detect(root, documents)` form remains supported.
+
+### Report pipeline (Milestone 0007)
+
+A report is never formatted by the engine or a detector. The scan result is turned into a plain
+JSON-shaped context and handed to a logic-less template renderer
+([contract](/docs/specs/report-template-format.md#1-pipeline)):
+
+```text
+ScanResult --> ReportModel (core provider) --> + extension providers --> context
+                                                                           |
+template.json --> loader/validator --> renderer(template, context) --> sink (str)
+```
+
+- `ReportModel.build` classifies each finding (`classify`, the single source of fault class, tier,
+  outcome and `domain`) and never exposes `ScanResult` or `Finding` objects to a template.
+- Extensions (`builtin:domain`, `builtin:document_stats`, and `python:` ones allowed only from the
+  command line) add data under their own `ext.<name>` namespace. See
+  [Custom reports](/docs/user/tutorial/custom-reports.md).
+- The Milestone 0006 fault-event adapter is not implemented. When it lands it is specified to take
+  `domain` from the same `domain_for` function, so reports and events cannot disagree.
 
 ## Configuration
 
@@ -168,6 +190,27 @@ consumed. Options are grouped by the rule that reads them.
 | `documentation_naming_allow`           | `README.md`, `index.md` | File names (or whole relative paths) exempt from the policy.                                |
 | `documentation_naming_directories`     | `true`                  | Whether directory components are checked as well as file names.                             |
 | `documentation_naming_prefix_patterns` | `[]`                    | Glob exceptions for prefixes such as numeric ADR numbers (`?` and `*` only, never a regex). |
+
+## Report options (Milestone 0007)
+
+Every report is rendered from a template (see the
+[report template format](/docs/specs/report-template-format.md)). These typed options load from
+both config file forms and are validated like the policy options above:
+
+| Option                        | Default | Meaning                                                                                      |
+|-------------------------------|---------|----------------------------------------------------------------------------------------------|
+| `report_templates_dir`        | none    | Directory, relative to the scan root, of extra templates selectable by name with `--format`. |
+| `report_show_clean_documents` | `false` | Whether the text report also lists documents without problems (`--show-clean-documents`).    |
+| `report_include_run_meta`     | `false` | Whether the report context carries the per-run `run.generated_at` and `run.id` values.       |
+
+- `report_templates_dir` is checked lexically when the configuration loads. The template loader
+  applies the full containment gate (no symlink out of the root) before it lists or opens anything
+  in the directory. A packaged template name can never be shadowed by a directory template.
+- `docsentinel scan --format NAME` accepts any packaged name (`text`, `github`, `json`, `json-v1`,
+  `json-documents`) or a template name from `report_templates_dir`. `--template PATH` renders an
+  invoker-supplied file and wins over `--format`. Any template error prints `Scan failed:` and exits
+  `2`. `docsentinel doctor` lists the discovered templates.
+- `--format json` is schema 2 (one record per document). The schema-1 bytes are `--format json-v1`.
 
 ## Fast profile rules
 
@@ -374,8 +417,10 @@ Opt-in status is reported, never hidden:
 - **`ScanResult.notice`** counts only genuinely evaluated rules and names any active opt-in rule
   whose policy is off, for example:
   `12 fast rule(s) evaluated; opt-in rule(s) not enabled: DS110 (set require_fence_languages), DS112 (set navigation_indexes), DS115 (set deprecated_references_file), DS118 (set documentation_naming).`
-  The `ScanResult` dataclass shape, JSON schema v1, exit codes and `enabled_rules` semantics are
-  unchanged: selection stays orthogonal to whether an opt-in policy fires.
+  The notice is built from two structured `ScanResult` fields, `rules_evaluated` (int) and
+  `opt_in_off` (`(code, option)` pairs), so templates can loop over the off rules. JSON schema v1,
+  exit codes and `enabled_rules` semantics are unchanged: selection stays orthogonal to whether an
+  opt-in policy fires.
 - **`docsentinel rules`** marks such a rule, for example:
   - `DS110: Missing language labels on code fences [opt-in: set require_fence_languages]`
   - `DS112: Declared documentation navigation integrity [opt-in: set navigation_indexes]`
@@ -482,3 +527,18 @@ contract shape for JSON and text consumers.
 changed (not merely added) in `ScanResult`'s JSON representation. Adding a new optional field with a
 sensible default does **not** require a bump; only breaking changes do. This mirrors
 semantic versioning for data, not for code.
+
+Milestone 0007 adds defaulted fields that the schema-1 JSON report deliberately omits, so its output
+stays byte-identical:
+
+- `Finding.column`, `Finding.value` and `Finding.type` are optional report attributes. They are
+  excluded from equality, hashing and baseline fingerprints. `value` holds only the token the
+  message already echoes, such as a link target, never a surrounding snippet. `DS101`, `DS102` and
+  `DS103` set them; other rules leave them `None`.
+- `ScanResult.rules_evaluated` and `ScanResult.opt_in_off` hold the structured form of `notice`.
+
+`telemetry.model.ReportModel.build(result, config)` turns a `ScanResult` into the JSON-shaped
+context that report templates render from. `telemetry.model.CONTEXT_SCHEMA` declares each variable
+with its type and trust tag. Problems carry `fault_class`, `tier` and `outcome` from
+`telemetry.classify.classify`, the function the Milestone 0006 adapter is specified to use. See the
+[report template format](/docs/specs/report-template-format.md).

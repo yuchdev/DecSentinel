@@ -1,7 +1,7 @@
 ---
 name: test-documenter
 description: Use this agent to document existing automated tests - classifying each as Unit, Mock, Integration, or E2E and inserting a standardized Scenario/Boundaries/On-failure docstring. Use after test authoring (testing-expert) is done, or on a legacy suite that has no test documentation yet. Does not write test logic, add assertions, or change fixtures - docstrings only. Not a substitute for testing-expert (test generation) or feature-reviewer (test quality).
-model: claude-sonnet-4-6
+model: claude-sonnet-5-5
 tools: Read, Grep, Glob, Bash, Edit
 allowed-tools: Read, Grep, Glob, Bash, Edit
 ---

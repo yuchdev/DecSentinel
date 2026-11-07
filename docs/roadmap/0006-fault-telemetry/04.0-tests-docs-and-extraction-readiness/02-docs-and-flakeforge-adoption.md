@@ -9,12 +9,12 @@
   the written cross-tool contract
   ([docs/specs/fault-event-contract.md](/docs/specs/fault-event-contract.md)), the
   DocSentinel-local `FaultEvent`/`FaultEventSink` Protocol and pluggable sinks in
-  `telemetry.py`, the single `engine.scan()` call site, the event schema, the
+  `telemetry/`, the single `engine.scan()` call site, the event schema, the
   `tier`/`outcome`/`class` vocabulary, and the default-off / observational
   guarantee. State clearly there is **no shared or extracted module**.
 - **`CLAUDE.md`:** a short architecture note that `engine.scan()` optionally emits
   fault-telemetry events from one call site (reusing the assembled findings, never a
-  second analyzer run); that `telemetry.py` owns DocSentinel's independent event
+  second analyzer run); that `telemetry/` owns DocSentinel's independent event
   type, `FaultEventSink` Protocol, reference sinks (`JsonlSink`/`LoggingSink`/
   `SqliteSink`/`NullSink`), the `build_sink` selector factory, and the adapter; and
   that the event `schema_version` (string) is distinct from

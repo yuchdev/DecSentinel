@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "profile": "fast",
+  "documents": [
+    {
+      "path": "README.md",
+      "bytes": 120
+    },
+    {
+      "path": "docs/guide.md",
+      "bytes": 342
+    }
+  ],
+  "findings": [
+    {
+      "rule": "DS101",
+      "path": "README.md",
+      "message": "Dangling link target: ./missing.md",
+      "severity": "error",
+      "line": 3
+    },
+    {
+      "rule": "DS102",
+      "path": "docs/guide.md",
+      "message": "Stray HTML comment",
+      "severity": "warning",
+      "line": 7
+    },
+    {
+      "rule": "DS103",
+      "path": "docs/guide.md",
+      "message": "Unresolvable path: scripts/run.sh",
+      "severity": "warning",
+      "line": null
+    }
+  ],
+  "enabled_rules": [
+    "DS101",
+    "DS102",
+    "DS103"
+  ],
+  "pending": [],
+  "notice": "3 fast rule(s) evaluated."
+}

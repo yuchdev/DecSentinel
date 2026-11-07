@@ -1,11 +1,13 @@
 # Rule-code to fault-class mapping
 
 Hand-maintained mapping consumed by the fault-telemetry adapter in
-[`telemetry.py`](telemetry.py) to set the `class` field of every emitted
+[`telemetry/`](telemetry/__init__.py) to set the `class` field of every emitted
 `FaultEvent`. It lives next to [`rules.py`](rules.py) because it is co-maintained
 with the rule registry: **every registered rule code must have exactly one row
 here.** A rule that reaches the adapter with no row falls back to the generic
 class `"unmapped"` - that fallback is a review failure, not a normal state.
+The runtime copy is `FAULT_CLASSES` in [`telemetry/classify.py`](telemetry/classify.py),
+shared by the report model and the adapter; a test fails if the two drift.
 
 See [ADR 0002](/docs/adr/0002-fault-telemetry-event-emission.md) for the event
 schema, the `tier`/`outcome` vocabulary, and where emission happens, and

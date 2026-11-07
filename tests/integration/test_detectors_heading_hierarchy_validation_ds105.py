@@ -461,7 +461,7 @@ def test_reports_are_stable_across_formats(asset_case: Callable[[str, str], Asse
     assert render(result, "text") == text
     assert "warning: README.md: heading level 4 skips a level after level 2" in text
 
-    payload = json.loads(render(result, "json"))
+    payload = json.loads(render(result, "json-v1"))
     assert payload["schema_version"] == 1
     assert payload["enabled_rules"] == ["DS105"]
     assert payload["findings"][0]["rule"] == "DS105"
@@ -470,7 +470,7 @@ def test_reports_are_stable_across_formats(asset_case: Callable[[str, str], Asse
 
     github = render(result, "github")
     assert render(result, "github") == github
-    assert github.startswith("::warning file=README.md,line=5::")
+    assert github.startswith("::warning file=README.md,line=5,title=DS105::")
 
 
 def test_cli_fast_json_scan_reports_ds105_warning_and_exit_zero(
@@ -496,7 +496,7 @@ def test_cli_fast_json_scan_reports_ds105_warning_and_exit_zero(
     """
     case = asset_case("ds105", "skipped_intermediate_level")
 
-    exit_code = cli.main(["scan", str(case.root), "--profile", "fast", "--format", "json"])
+    exit_code = cli.main(["scan", str(case.root), "--profile", "fast", "--format", "json-v1"])
 
     captured = capsys.readouterr()
     payload = json.loads(captured.out)

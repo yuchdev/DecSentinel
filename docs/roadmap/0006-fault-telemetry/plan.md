@@ -28,7 +28,7 @@ already-assembled findings.
 1. The cross-tool coupling is the written spec
    [docs/specs/fault-event-contract.md](/docs/specs/fault-event-contract.md), not
    an importable module. DocSentinel implements its own `FaultEvent` dataclass and
-   `FaultEventSink` **Protocol** (PEP 544) in `telemetry.py`; FlakeForge
+   `FaultEventSink` **Protocol** (PEP 544) in `telemetry/`; FlakeForge
    implements its own equivalent independently. No runtime import crosses repos.
 2. The sink is **flexibly pluggable** via the `FaultEventSink` Protocol
    (`emit(event) -> None`, optional `close()`): reference sinks are `JsonlSink`
@@ -90,7 +90,7 @@ the same spec).
 ## Acceptance criteria
 
 - [ ] `docs/specs/fault-event-contract.md` is the canonical cross-tool contract;
-      `telemetry.py` implements DocSentinel's own `FaultEvent`/`FaultEventSink`
+      `telemetry/` implements DocSentinel's own `FaultEvent`/`FaultEventSink`
       with no shared/path-referenced module and no cross-repo import.
 - [ ] `FaultEvent` is a frozen dataclass; `to_json_dict` renames `fault_class` ->
       `"class"` and every field round-trips through `json.loads`.

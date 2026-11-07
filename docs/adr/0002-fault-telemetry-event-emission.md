@@ -112,7 +112,7 @@ symbol.
 
 ### 2. DocSentinel implements its OWN event type and Protocol
 
-In `src/docsentinel/telemetry.py` (co-located with the adapter and the
+In `src/docsentinel/telemetry/` (co-located with the adapter and the
 fault-class mapping it already owns), DocSentinel defines, independently:
 
 - **`FaultEvent` - a frozen dataclass** (not a `TypedDict`). The whole codebase
@@ -208,13 +208,13 @@ The `python:` form **reuses the FlakeForge `rule_modules` loading precedent**
 inventing a new extension mechanism; it inherits that convention's security note: a
 project-local telemetry target is code DocSentinel imports and runs, so it is only
 honoured from a trusted/loaded config and never resolved from an untrusted checkout
-without opt-in. A `build_sink(config)` factory in `telemetry.py` parses the
+without opt-in. A `build_sink(config)` factory in `telemetry/` parses the
 selector and returns the sink; an unparseable/unknown kind raises `ValueError`
 (surfacing at the engine as a swallowed emission error - never a scan failure).
 
 ### 5. DocSentinel adapter and emission call site
 
-`telemetry.py` also holds the adapter - the only module importing both the event
+`telemetry/` also holds the adapter - the only module importing both the event
 machinery and DocSentinel types. `events_for_result(result, *, model, suppressed)
 -> Iterator[FaultEvent]` reads the **already-assembled** `ScanResult`; it does not
 re-run analyzers or duplicate finding iteration. Mapping rules:
@@ -306,7 +306,7 @@ anything in.
   change is still a coordinated `schema_version` bump in both repos plus any
   collector - this ADR, the spec, and the FlakeForge mirror ADR are the migration
   anchor. **Affected components:** the spec
-  (`docs/specs/fault-event-contract.md`), `telemetry.py` (event, Protocol, sinks,
+  (`docs/specs/fault-event-contract.md`), `telemetry/` (event, Protocol, sinks,
   adapter, factory), `engine.scan()` (call site), `config.py`/`cli.py` (surface),
   and FlakeForge's independent implementation. **Migration path:** bump
   `SCHEMA_VERSION` and the spec's literal tables in one change (the tripwire forces

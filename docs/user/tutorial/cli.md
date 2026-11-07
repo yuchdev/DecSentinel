@@ -127,62 +127,105 @@ docsentinel scan --ignore DS102
 
 ## Output Formats: `--format`
 
-DocSentinel supports three output renderers:
+Every report is rendered from a template. `--format NAME` selects one by name. Five templates ship
+with DocSentinel. The [Report Formats](report.md) guide shows each one in full and explains how to
+migrate scripts written for the old output.
 
 ### 1. Human-Readable Text (`--format text`) - Default
 
-Prints an inventory table, rule status notices, and a categorized list of findings:
+Prints the scan summary, then each document that has problems with its findings indented directly
+under it:
 
 ```bash
 docsentinel scan --format text
 ```
 
+```text
+Documents: 2 (1 with problems)
+...
+README.md (74 bytes)
+  error: README.md: dangling link -> docs/nope.md
+```
+
+Clean documents are hidden. Add `--show-clean-documents` (or set
+`report_show_clean_documents = true`) to list them too.
+
 ### 2. Structured JSON (`--format json`)
 
-Outputs a JSON object adhering to Schema v1, ideal for programmatic consumers:
+Outputs a JSON object that follows **schema 2**: a summary, the rule status, and one record per
+document with its problems inside it. Clean documents are included with an empty `problems` list:
 
 ```bash
 docsentinel scan --format json
 ```
 
-Example JSON payload:
+Abridged JSON payload:
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "profile": "fast",
+  "run": { "model": null, "notice": "12 fast rule(s) evaluated; ...", "advisory": null },
+  "summary": { "documents": 2, "documents_with_problems": 1, "findings": 1,
+               "by_severity": { "error": 1 }, "by_rule": { "DS101": 1 } },
+  "rules": { "enabled": ["DS101", "DS102", "..."], "evaluated": 12, "opt_in_off": [ { "code": "DS110", "option": "require_fence_languages" } ] },
   "documents": [
-    {"path": "docs/README.md", "bytes": 1420}
-  ],
-  "findings": [
     {
-      "rule": "DS101",
-      "path": "docs/README.md",
-      "message": "broken relative link: missing-file.md",
-      "severity": "error",
-      "line": 42
-    }
+      "path": "README.md",
+      "bytes": 74,
+      "domain": "docs",
+      "problems": [
+        { "rule": "DS101", "type": "dangling link", "message": "dangling link -> docs/nope.md",
+          "value": "docs/nope.md", "severity": "error", "line": 3, "column": 15,
+          "fault_class": "dangling_reference", "tier": "deterministic", "outcome": "rejected" }
+      ]
+    },
+    { "path": "docs/setup.md", "bytes": 15, "domain": "docs", "problems": [] }
   ],
-  "enabled_rules": [
-    "DS101", "DS102", "DS103", "DS104", "DS105", "DS106",
-    "DS108", "DS109", "DS110", "DS112", "DS113", "DS114",
-    "DS115", "DS116", "DS117", "DS118"
-  ],
-  "pending": [],
-  "notice": "12 fast rule(s) evaluated; opt-in rule(s) not enabled: DS110 (set require_fence_languages), DS112 (set navigation_indexes), DS115 (set deprecated_references_file), DS118 (set documentation_naming)."
+  "pending": []
 }
 ```
 
-`enabled_rules` lists every rule selected in the active profile (selection is
-orthogonal to whether an opt-in policy fires). `notice` separately names the
-opt-in rules that are selected but currently silent.
+`rules.enabled` lists every rule selected in the active profile (selection is orthogonal to whether
+an opt-in policy fires). `rules.opt_in_off` separately names the opt-in rules that are selected but
+currently silent.
 
-### 3. GitHub Actions Annotations (`--format github`)
+### 3. Legacy JSON (`--format json-v1`)
 
-Formats findings directly as GitHub Actions workflow commands (`::error` and `::warning`):
+Outputs the schema 1 JSON that `--format json` printed before this release, unchanged: a flat
+`findings` list in which each finding carries its own `path`. Use it for consumers that have not
+moved to schema 2:
+
+```bash
+docsentinel scan --format json-v1
+```
+
+### 4. Document records only (`--format json-documents`)
+
+Outputs only the `documents` array of schema 2, as a bare JSON list.
+
+### 5. GitHub Actions Annotations (`--format github`)
+
+Formats findings as GitHub Actions workflow commands (`::error` and `::warning`). Each one carries
+`title=` with the rule code, and `col=` when the column is known:
 
 ```bash
 docsentinel scan --format github
 ```
+
+```text
+::error file=README.md,line=3,col=15,title=DS101::dangling link -> docs/nope.md
+```
+
+### Custom templates: `--template` and `report_templates_dir`
+
+- `--template PATH` renders with a template file you supply. It wins over `--format`.
+- `report_templates_dir` in the configuration names a directory under the scan root. Each
+  `NAME.json` in it can be selected with `--format NAME`. Packaged names always win.
+
+An unknown format name or an invalid template prints `Scan failed: ...` on stderr and exits `2`.
+`docsentinel doctor` lists the templates you can select. See
+[Report Formats](report.md#custom-templates) and the
+[report template format](../../specs/report-template-format.md).
 
 ---
 

@@ -80,7 +80,7 @@ def test_empty_scan_is_inventory_not_detection(tmp_path: Path):
     assert result.findings == ()
     assert result.enabled_rules == ()
     assert "explicit opt-in" in result.notice
-    assert json.loads(render(result, "json"))["enabled_rules"] == []
+    assert json.loads(render(result, "json-v1"))["enabled_rules"] == []
 
 
 def test_scan_runs_analyzer_for_active_profile(
@@ -1025,7 +1025,7 @@ def test_cli_scan_returns_one_and_renders_findings(
     monkeypatch.setattr(cli, "scan", fake_scan)
 
     assert main(["scan", str(tmp_path)]) == 1
-    assert "error: README.md: Broken link" in capsys.readouterr().out.splitlines()
+    assert "  error: README.md: Broken link" in capsys.readouterr().out.splitlines()
 
 
 def test_invalid_root(tmp_path: Path):
@@ -1120,7 +1120,7 @@ def test_cli_scan_selected_file(tmp_path: Path, capsys: pytest.CaptureFixture[st
         - Recent changes in code paths exercised by scan
     """
     (tmp_path / "a.md").write_text("a", encoding="utf-8")
-    assert main(["scan", str(tmp_path / "a.md"), "--format", "json"]) == 0
+    assert main(["scan", str(tmp_path / "a.md"), "--format", "json-v1"]) == 0
     assert json.loads(capsys.readouterr().out)["documents"][0]["path"] == "a.md"
 
 

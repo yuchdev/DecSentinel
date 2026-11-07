@@ -1,0 +1,2 @@
+::error file=evil\x1b[31m%0D%0A%3A%3Aerror%3A%3Aspoofed\u202e.md,line=3::Dangling link target: ./x\u2066.md%0A::error file=a::forged\x07\x00\x7f
+::warning file=docs/café 50%25%2Ca%3Ab\u200b.md::Stray comment \u2028 100%25 \ufeff\x85 \u200f end

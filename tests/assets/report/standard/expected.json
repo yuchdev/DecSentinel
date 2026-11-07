@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "profile": "standard",
+  "documents": [
+    {
+      "path": "docs/a.md",
+      "bytes": 1024
+    },
+    {
+      "path": "docs/b.md",
+      "bytes": 2048
+    }
+  ],
+  "findings": [
+    {
+      "rule": "DS201",
+      "path": "docs/a.md",
+      "message": "Grade level 19.2 exceeds max_grade_level 18.0",
+      "severity": "warning",
+      "line": null
+    },
+    {
+      "rule": "DS202",
+      "path": "docs/b.md",
+      "message": "Paragraph duplicates docs/a.md:4 (similarity 0.97)",
+      "severity": "warning",
+      "line": 9
+    },
+    {
+      "rule": "DS203",
+      "path": "docs/b.md",
+      "message": "Low-information paragraph (score 0.05)",
+      "severity": "warning",
+      "line": 15
+    },
+    {
+      "rule": "DS204",
+      "path": "src/calc.py",
+      "message": "Docstring parameter 'y' does not exist in add(x)",
+      "severity": "error",
+      "line": 12
+    }
+  ],
+  "enabled_rules": [
+    "DS201",
+    "DS202",
+    "DS203",
+    "DS204"
+  ],
+  "pending": [
+    "DS204: no docsig_paths configured"
+  ],
+  "notice": "4 standard rule(s) evaluated."
+}

@@ -6,10 +6,13 @@ Detection over documents is covered by ``tests/integration/test_detectors_commen
 import importlib
 import types
 from collections.abc import Iterator
+from pathlib import Path
+from typing import Optional
+from unittest import mock
 
 import pytest
 
-from docsentinel import rules
+from docsentinel import models, rules
 
 comments: types.ModuleType
 
@@ -132,3 +135,69 @@ def test_strip_fenced_blocks_requires_matching_marker_to_close_fence():
 
     assert "still fenced" not in stripped
     assert "<!-- visible -->" in stripped
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    (
+        ("é🙂 <!-- a --><!-- b -->", [(1, 4), (1, 14)]),
+        ("\n  <!-- a --> x <!-- b -->", [(2, 3), (2, 16)]),
+        ("é <!-- a\nb -->🙂<!-- c -->", [(1, 3), (2, 7)]),
+        ("<!-- a -->\n\n gap\né <!-- b -->", [(1, 1), (4, 3)]),
+        ("<!-- unclosed\n", []),
+    ),
+    ids=("same-line-unicode", "cached-line-start", "multiline", "gaps", "unclosed"),
+)
+def test_detect_locations_search_only_since_previous_match(
+    tmp_path: Path, text: str, expected: list[tuple[int, int]]
+):
+    """
+    [Unit] detectors comments: preserves locations with bounded newline searches.
+
+    Scenario:
+        Given comments on the same line, across lines, after gaps, or unclosed
+        When detection locates each comment
+        Then exact code-point locations and disjoint search intervals are preserved.
+
+    Boundaries:
+        - Focus: cached line start and incremental newline searches
+        - Fixtures/params: isolated root, Markdown text, expected locations
+        - Scope: detector logic with document reading and fence stripping mocked
+
+    On failure, first check:
+        - Newline search bounds and cached line start in comments.detect
+
+    :param tmp_path: The isolated scan root.
+    :param text: Already unfenced Markdown supplied by the mocked reader.
+    :param expected: Exact one-based line and code-point column pairs.
+    """
+    searches: list[tuple[int, int]] = []
+
+    class TrackedText(str):
+        """Record newline-search bounds without changing string semantics."""
+
+        def rfind(self, sub: str, start: int = 0, end: Optional[int] = None) -> int:
+            """Record newline intervals and delegate to the built-in search.
+
+            :param sub: The searched substring.
+            :param start: The inclusive lower bound.
+            :param end: The exclusive upper bound, or the string length.
+            :returns: The rightmost matching offset, or minus one.
+            """
+            stop = len(self) if end is None else end
+            if sub == "\n":
+                searches.append((start, stop))
+            return super().rfind(sub, start, stop)
+
+    tracked = TrackedText(text)
+    document = models.Document(path="README.md", bytes=len(text.encode("utf-8")))
+    with (
+        mock.patch.object(comments, "_read_text", return_value=tracked),
+        mock.patch.object(comments, "_strip_fenced_blocks", return_value=tracked),
+    ):
+        findings = comments.detect(tmp_path, (document,))
+
+    assert [(finding.line, finding.column) for finding in findings] == expected
+    starts = [match.start() for match in comments._COMMENT_RE.finditer(text)]
+    previous_starts = [0, *starts[:-1]] if starts else []
+    assert searches == list(zip(previous_starts, starts, strict=True))

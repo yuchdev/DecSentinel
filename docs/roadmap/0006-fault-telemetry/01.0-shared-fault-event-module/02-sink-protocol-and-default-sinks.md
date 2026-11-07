@@ -1,7 +1,7 @@
 # Task 02 — `FaultEventSink` Protocol and the null sink
 
 **Parent story:** [Story 01.0](/docs/roadmap/0006-fault-telemetry/01.0-shared-fault-event-module/README.md)  
-**Proposed source:** `src/docsentinel/telemetry.py`
+**Proposed source:** `src/docsentinel/telemetry/`
 
 ## Required contract
 

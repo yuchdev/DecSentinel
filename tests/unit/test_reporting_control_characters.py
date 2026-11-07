@@ -12,8 +12,12 @@ import hashlib
 import json
 
 from docsentinel.baseline import fingerprint
+from docsentinel.config import Config
 from docsentinel.models import Document, Finding, ScanResult
-from docsentinel.reporting import _escape_data, _escape_property, _neutralize_controls, neutralize_text, render
+from docsentinel.reporting import neutralize_text, render
+from docsentinel.telemetry.filters import _neutralize_controls
+from docsentinel.telemetry.filters import gha_data as _escape_data
+from docsentinel.telemetry.filters import gha_property as _escape_property
 
 #: An untrusted file name carrying an ANSI colour escape, CR, LF and a spoofed
 #: GitHub workflow command, exactly the shape a legally-named repository file can take.
@@ -59,7 +63,7 @@ def test_text_sink_neutralises_escape_cr_lf_in_path_and_message():
     rendered = render(_result((Finding(rule="DS101", path=_HOSTILE_PATH, message=message, severity="error", line=1),)))
     assert "\x1b" not in rendered
     # The only CR/LF in the output are the renderer's own line separators, never from content.
-    content_line = next(line for line in rendered.splitlines() if line.startswith("error:"))
+    content_line = next(line for line in rendered.splitlines() if line.startswith("  error:"))
     assert "\x1b" not in content_line and "\r" not in content_line
     assert "\\x1b" in content_line and "\\x0d" in content_line and "\\x0a" in content_line
     assert "docs/evil\\x1b[31m\\x0d\\x0a::error::spoofed.md" in content_line
@@ -82,7 +86,10 @@ def test_text_sink_neutralises_document_path():
     On failure, first check:
         - Whether Document.path bypassed neutralisation in the documents listing
     """
-    rendered = render(_result((), documents=(Document(path=_HOSTILE_PATH, bytes=10),)))
+    rendered = render(
+        _result((), documents=(Document(path=_HOSTILE_PATH, bytes=10),)),
+        config=Config(report_show_clean_documents=True),  # the text report hides clean documents by default
+    )
     doc_line = next(line for line in rendered.splitlines() if "spoofed.md" in line)
     assert "\x1b" not in doc_line and "\r" not in doc_line
     assert "docs/evil\\x1b[31m\\x0d\\x0a::error::spoofed.md (10 bytes)" == doc_line.strip()
@@ -167,8 +174,8 @@ def test_json_sink_already_escapes_controls_and_stays_ascii():
     assert "\x1b" not in serialized and "\r" not in serialized
     assert serialized.isascii()  # ensure_ascii default escaped the non-ASCII letter
     payload = json.loads(serialized)
-    assert payload["findings"][0]["path"] == _HOSTILE_PATH  # lossless round-trip (raw preserved)
-    assert payload["findings"][0]["message"] == message
+    assert payload["documents"][0]["path"] == _HOSTILE_PATH  # lossless round-trip (raw preserved)
+    assert payload["documents"][0]["problems"][0]["message"] == message
 
 
 def test_ordinary_unicode_and_ascii_render_byte_identically():
@@ -192,7 +199,7 @@ def test_ordinary_unicode_and_ascii_render_byte_identically():
     assert _neutralize_controls("docs/guide_日本語.md") == "docs/guide_日本語.md"
     assert _neutralize_controls("Broken anchor -> #section", keep_crlf=True) == "Broken anchor -> #section"
     result = _result((Finding(rule="DS101", path="docs/intro.md", message="Dangling link", severity="error", line=7),))
-    assert render(result, "github") == "::error file=docs/intro.md,line=7::Dangling link"
+    assert render(result, "github") == "::error file=docs/intro.md,line=7,title=DS101::Dangling link"
     assert "error: docs/intro.md: Dangling link" in render(result, "text")
 
 

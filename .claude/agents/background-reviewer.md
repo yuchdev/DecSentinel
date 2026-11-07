@@ -1,7 +1,7 @@
 ---
 name: background-reviewer
 description: Use this agent as the asynchronous deep reviewer that runs off the hot path. Use for routine code review, dependency audits, secret scanning across new files, performance-regression hunting, and license-compatibility checks. Writes findings to docs/reviews/. Not a merge gate - produces a durable report for the team.
-model: claude-sonnet-4-6
+model: claude-sonnet-5-5
 tools: Read, Grep, Glob, Bash, Write, WebFetch, WebSearch
 allowed-tools: Read, Grep, Glob, Bash, Write, WebFetch, WebSearch
 ---

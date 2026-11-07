@@ -559,7 +559,7 @@ def test_reports_are_stable_across_formats(asset_case: Callable[[str, str], Asse
     assert render(result, "text") == text
     assert "warning: README.md: fenced code block has no language label" in text
 
-    payload = json.loads(render(result, "json"))
+    payload = json.loads(render(result, "json-v1"))
     assert payload["schema_version"] == 1
     assert payload["enabled_rules"] == ["DS110"]
     assert payload["findings"][0]["rule"] == "DS110"
@@ -568,7 +568,7 @@ def test_reports_are_stable_across_formats(asset_case: Callable[[str, str], Asse
 
     github = render(result, "github")
     assert render(result, "github") == github
-    assert github.startswith("::warning file=README.md,line=3::")
+    assert github.startswith("::warning file=README.md,line=3,title=DS110::")
 
 
 def test_cli_fast_json_scan_reports_ds110_warning_and_exit_zero(
@@ -596,7 +596,7 @@ def test_cli_fast_json_scan_reports_ds110_warning_and_exit_zero(
     case = asset_case("ds110", "unlabelled_python_example")
     (case.root / "docsentinel.toml").write_text('profile = "fast"\nrequire_fence_languages = true\n', encoding="utf-8")
 
-    exit_code = cli.main(["scan", str(case.root), "--profile", "fast", "--format", "json"])
+    exit_code = cli.main(["scan", str(case.root), "--profile", "fast", "--format", "json-v1"])
 
     captured = capsys.readouterr()
     payload = json.loads(captured.out)
@@ -1293,7 +1293,7 @@ def test_hostile_info_string_cannot_inject_into_text_or_github_output(tmp_path: 
     github = render(result, "github")
     github_lines = github.split("\n")
     assert len(github_lines) == 1  # exactly one ::warning line for the one finding
-    assert github_lines[0].startswith("::warning file=README.md,line=3::")
+    assert github_lines[0].startswith("::warning file=README.md,line=3,title=DS110::")
     assert "\x1b" not in github  # no raw control byte survives into the annotation
     assert "%250A" in github  # the literal %0A had its % escaped, so it cannot be a command break
 

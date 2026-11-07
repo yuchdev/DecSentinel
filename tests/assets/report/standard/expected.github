@@ -1,0 +1,4 @@
+::warning file=docs/a.md::Grade level 19.2 exceeds max_grade_level 18.0
+::warning file=docs/b.md,line=9::Paragraph duplicates docs/a.md:4 (similarity 0.97)
+::warning file=docs/b.md,line=15::Low-information paragraph (score 0.05)
+::error file=src/calc.py,line=12::Docstring parameter 'y' does not exist in add(x)

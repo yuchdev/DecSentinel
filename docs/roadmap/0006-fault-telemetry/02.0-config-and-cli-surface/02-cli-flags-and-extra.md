@@ -11,6 +11,12 @@
 | `telemetry_sink` | str | `"stdout"` | a string; parsed by `build_sink` (`stdout` / `file:<path>` / `sqlite:<path>` / `logging` / `python:<module>:<callable>`). **Not** root-constrained — the path/target is an output artifact a CI step owns, unlike input-path options such as `navigation_indexes`/`deprecated_references_file`. A malformed selector is a `ConfigError` at load time |
 | `generated_by_model` | str | `""` | a string; empty serialises to `model: null` in the event |
 
+> **Pending reconciliation (Milestone 0007 requirement).** The `telemetry_sink` row
+> above conflicts with the requirement recorded in
+> [Task 01](/docs/roadmap/0006-fault-telemetry/02.0-config-and-cli-surface/01-typed-config-options.md):
+> `python:` is argv-only (a config `python:` selector is a `ConfigError`), and
+> config-sourced `file:`/`sqlite:` paths must be root-contained.
+
 - Add the three names to `_CONFIG_OPTIONS` and the three fields (with defaults and
   `:ivar:` docstrings) to the frozen `Config`.
 - `telemetry_enabled` joins `_BOOL_OPTIONS`, validated by the existing loop.

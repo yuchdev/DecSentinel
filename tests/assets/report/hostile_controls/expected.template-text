@@ -1,0 +1,9 @@
+Schema version: 1
+Profile: fast
+Documents: 2 (2 with problems)
+Enabled rules: ["DS101", "DS102"]
+2 fast rule(s) evaluated.
+evil\x1b[31m\x0d\x0a::error::spoofed\u202e.md (40 bytes)
+  error: evil\x1b[31m\x0d\x0a::error::spoofed\u202e.md: Dangling link target: ./x\u2066.md\x0a::error file=a::forged\x07\x00\x7f
+docs/café 50%,a:b\u200b.md (12 bytes)
+  warning: docs/café 50%,a:b\u200b.md: Stray comment \u2028 100% \ufeff\x85 \u200f end

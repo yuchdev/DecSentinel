@@ -1,0 +1,27 @@
+[
+  {
+    "path": "docs/install.md",
+    "bytes": 512,
+    "domain": "docs",
+    "problems": []
+  },
+  {
+    "path": "docs/upgrade.md",
+    "bytes": 640,
+    "domain": "docs",
+    "problems": [
+      {
+        "rule": "DS301",
+        "type": "fact-contradiction candidate",
+        "message": "Possible contradiction with docs/install.md:2: 'service requires Python 3.12' vs 'service requires Python 3.11'",
+        "value": null,
+        "severity": "warning",
+        "line": 5,
+        "column": null,
+        "fault_class": "contradiction_candidate",
+        "tier": "heuristic",
+        "outcome": "advisory"
+      }
+    ]
+  }
+]

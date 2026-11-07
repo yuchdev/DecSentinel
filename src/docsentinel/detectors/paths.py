@@ -118,7 +118,12 @@ def _link_label_spans(text: str) -> tuple[tuple[int, int], ...]:
 
 
 def detect(root: Path, documents: tuple[models.Document, ...]) -> tuple[models.Finding, ...]:
-    """Return DS103 findings for Markdown documents in their supplied order."""
+    """Return DS103 findings for Markdown documents in their supplied order.
+
+    :param root: The scan root directory.
+    :param documents: Documents to inspect in their supplied order.
+    :returns: Findings with one-based code-point locations.
+    """
     findings: list[models.Finding] = []
     for document in documents:
         if not document.path.endswith(".md"):
@@ -130,10 +135,14 @@ def detect(root: Path, documents: tuple[models.Document, ...]) -> tuple[models.F
         label_index = 0
         line = 1
         line_cursor = 0
+        line_start = 0
 
         for match in _CODE_SPAN_RE.finditer(text):
             start, end = match.span()
             line += text.count("\n", line_cursor, start)
+            last_newline = text.rfind("\n", line_cursor, start)
+            if last_newline != -1:
+                line_start = last_newline + 1
             line_cursor = start
 
             while label_index < len(label_spans) and label_spans[label_index][1] <= start:
@@ -172,6 +181,9 @@ def detect(root: Path, documents: tuple[models.Document, ...]) -> tuple[models.F
                     message=f"unresolvable path -> {candidate}",
                     severity=DS103.severity,
                     line=line,
+                    column=match.start(1) - line_start + 1,
+                    value=candidate,
+                    type="unresolvable path",
                 )
             )
     return tuple(findings)

@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "profile": "deep",
+  "documents": [
+    {
+      "path": "docs/install.md",
+      "bytes": 512
+    },
+    {
+      "path": "docs/upgrade.md",
+      "bytes": 640
+    }
+  ],
+  "findings": [
+    {
+      "rule": "DS301",
+      "path": "docs/upgrade.md",
+      "message": "Possible contradiction with docs/install.md:2: 'service requires Python 3.12' vs 'service requires Python 3.11'",
+      "severity": "warning",
+      "line": 5
+    }
+  ],
+  "enabled_rules": [
+    "DS301"
+  ],
+  "pending": [],
+  "notice": "1 deep rule(s) evaluated."
+}

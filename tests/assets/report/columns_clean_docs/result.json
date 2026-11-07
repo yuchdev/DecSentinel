@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "profile": "fast",
+  "documents": [
+    {
+      "path": "README.md",
+      "bytes": 200
+    },
+    {
+      "path": "docs/clean.md",
+      "bytes": 50
+    },
+    {
+      "path": "docs/z.md",
+      "bytes": 300
+    }
+  ],
+  "findings": [
+    {
+      "rule": "DS101",
+      "path": "docs/z.md",
+      "message": "dangling link -> ./gone.md",
+      "severity": "error",
+      "line": 4,
+      "column": 12,
+      "value": "./gone.md",
+      "type": "dangling link"
+    },
+    {
+      "rule": "DS101",
+      "path": "README.md",
+      "message": "dangling link -> /docs/adr/README.md",
+      "severity": "error",
+      "line": 5,
+      "column": 10,
+      "value": "/docs/adr/README.md",
+      "type": "dangling link"
+    },
+    {
+      "rule": "DS101",
+      "path": "README.md",
+      "message": "dangling link -> /docs/adr/README.md",
+      "severity": "error",
+      "line": 5,
+      "column": 45,
+      "value": "/docs/adr/README.md",
+      "type": "dangling link"
+    },
+    {
+      "rule": "DS102",
+      "path": "docs/z.md",
+      "message": "Stray HTML comment",
+      "severity": "warning",
+      "line": 9,
+      "column": 1,
+      "value": null,
+      "type": "stray html comment"
+    },
+    {
+      "rule": "DS103",
+      "path": "README.md",
+      "message": "Unresolvable path: scripts/run.sh",
+      "severity": "warning",
+      "line": null,
+      "column": 7,
+      "value": "scripts/run.sh",
+      "type": "unresolvable path"
+    }
+  ],
+  "enabled_rules": [
+    "DS101",
+    "DS102",
+    "DS103",
+    "DS110"
+  ],
+  "pending": [],
+  "notice": "3 fast rule(s) evaluated; opt-in rule(s) not enabled: DS110 (set require_fence_languages).",
+  "rules_evaluated": 3,
+  "opt_in_off": [
+    [
+      "DS110",
+      "require_fence_languages"
+    ]
+  ]
+}

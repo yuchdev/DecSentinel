@@ -343,7 +343,7 @@ name = "cytoolz"
 version = "1.2.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "toolz" },
+    { name = "toolz", marker = "python_full_version < '3.15'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/43/ce/d8bd9b5f85b11c7231f7cec791e1248949c8073e9cded5076759d973d35b/cytoolz-1.2.0.tar.gz", hash = "sha256:fdd8ded8a93e1be009577fccddaacf78aa21cbe7dc6ec53c229def0198a1ffa5", size = 765694, upload-time = "2026-10-08T19:07:00.814Z" }
 wheels = [
@@ -501,7 +501,7 @@ wheels = [
 
 [[package]]
 name = "docsentinel"
-version = "1.1.0"
+version = "1.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "docsig" },
@@ -509,7 +509,7 @@ dependencies = [
     { name = "release-saga" },
     { name = "scikit-learn" },
     { name = "spacy" },
-    { name = "textacy" },
+    { name = "textacy", marker = "python_full_version < '3.13'" },
     { name = "textstat" },
 ]
 
@@ -526,7 +526,7 @@ requires-dist = [
     { name = "release-saga", specifier = "==1.2.0" },
     { name = "scikit-learn", specifier = ">=1.4" },
     { name = "spacy", specifier = ">=3.8.16" },
-    { name = "textacy", specifier = ">=0.13" },
+    { name = "textacy", marker = "python_full_version < '3.13'", specifier = ">=0.13" },
     { name = "textstat", specifier = ">=0.7" },
 ]
 provides-extras = ["test", "fast", "standard", "deep"]
@@ -560,7 +560,7 @@ name = "floret"
 version = "0.10.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "numpy" },
+    { name = "numpy", marker = "python_full_version < '3.15'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/c4/a4/0286fed39e374a2237180ee1976444908250f54a01fa8ac198764abdfc59/floret-0.10.5.tar.gz", hash = "sha256:8a94654a87b3335499cd4d14532a6f947a8cc14bd3e28044d7ccf06e99084156", size = 70937, upload-time = "2023-11-04T08:31:29.447Z" }
 wheels = [
@@ -1616,20 +1616,20 @@ name = "textacy"
 version = "0.13.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cachetools" },
-    { name = "catalogue" },
-    { name = "cytoolz" },
-    { name = "floret" },
-    { name = "jellyfish" },
-    { name = "joblib" },
-    { name = "networkx" },
-    { name = "numpy" },
-    { name = "pyphen" },
-    { name = "requests" },
-    { name = "scikit-learn" },
-    { name = "scipy" },
-    { name = "spacy" },
-    { name = "tqdm" },
+    { name = "cachetools", marker = "python_full_version < '3.15'" },
+    { name = "catalogue", marker = "python_full_version < '3.15'" },
+    { name = "cytoolz", marker = "python_full_version < '3.15'" },
+    { name = "floret", marker = "python_full_version < '3.15'" },
+    { name = "jellyfish", marker = "python_full_version < '3.15'" },
+    { name = "joblib", marker = "python_full_version < '3.15'" },
+    { name = "networkx", marker = "python_full_version < '3.15'" },
+    { name = "numpy", marker = "python_full_version < '3.15'" },
+    { name = "pyphen", marker = "python_full_version < '3.15'" },
+    { name = "requests", marker = "python_full_version < '3.15'" },
+    { name = "scikit-learn", marker = "python_full_version < '3.15'" },
+    { name = "scipy", marker = "python_full_version < '3.15'" },
+    { name = "spacy", marker = "python_full_version < '3.15'" },
+    { name = "tqdm", marker = "python_full_version < '3.15'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/04/fe/4a578d9f68e7aaf6b7be7d8df974ab3b1b21f2e64d492919adda3cd80b71/textacy-0.13.0.tar.gz", hash = "sha256:6be02448c08fc7d7c4edf85289006e39a4a53ef747201ff24b675c652f40c686", size = 435659, upload-time = "2023-04-02T23:05:33.42Z" }
 wheels = [

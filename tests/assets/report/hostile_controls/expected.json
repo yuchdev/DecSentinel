@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "profile": "fast",
+  "documents": [
+    {
+      "path": "evil\u001b[31m\r\n::error::spoofed\u202e.md",
+      "bytes": 40
+    },
+    {
+      "path": "docs/caf\u00e9 50%,a:b\u200b.md",
+      "bytes": 12
+    }
+  ],
+  "findings": [
+    {
+      "rule": "DS101",
+      "path": "evil\u001b[31m\r\n::error::spoofed\u202e.md",
+      "message": "Dangling link target: ./x\u2066.md\n::error file=a::forged\u0007\u0000\u007f",
+      "severity": "error",
+      "line": 3
+    },
+    {
+      "rule": "DS102",
+      "path": "docs/caf\u00e9 50%,a:b\u200b.md",
+      "message": "Stray comment \u2028 100% \ufeff\u0085 \u200f end",
+      "severity": "warning",
+      "line": null
+    }
+  ],
+  "enabled_rules": [
+    "DS101",
+    "DS102"
+  ],
+  "pending": [],
+  "notice": "2 fast rule(s) evaluated."
+}
