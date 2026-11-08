@@ -7,7 +7,9 @@ extend-exclude = [
     # Text assets are test input data (deliberately broken docs and Python sources), not code.
     "tests/assets",
     # Canon data submodules are separate repositories with their own lint setup.
-    "canons"
+    "canons",
+    # Vendored third-party skill (SpillwaveSolutions/plantuml); linting it would rewrite upstream code.
+    ".claude/skills/plantuml"
 ]
 
 [lint]
