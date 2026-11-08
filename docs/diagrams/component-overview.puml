@@ -1,0 +1,99 @@
+@startuml component-overview
+title DocSentinel - component overview (as built, src/docsentinel)
+left to right direction
+skinparam componentStyle rectangle
+skinparam shadowing false
+skinparam packageStyle rectangle
+
+package "Consumers" {
+  [cli.py\nscan | baseline | init | rules | doctor] as cli
+  [~__init~__.py\nPython API: scan, load_config, ...] as api
+  [pytest_plugin.py\ndocsentinel_scan fixture] as plugin
+  [.pre-commit-hooks.yaml\ndocsentinel-fast / -standard] as precommit
+}
+
+package "Core" {
+  [engine.py\nscan()] as engine
+  [config.py\nConfig, load_config, ConfigError] as config
+  [discovery.py\ndiscover()] as discovery
+  [rules.py\nRULES, ANALYZERS, opt_in_satisfied] as rules
+  [models.py\nDocument, Finding, ScanResult] as models
+  [baseline.py\nfingerprints, filter_baselined] as baseline
+  [code_discovery.py\ndiscover_python()] as codedisc
+  [errors.py\nExtraNotInstalledError] as errors
+}
+
+package "Detectors (see component-detectors)" {
+  [Fast DS1xx\nstdlib only, eager] as fast
+  [Standard DS2xx\nlazy via detectors/loader.py] as standard
+  [Deep DS301\nlazy spaCy/textacy] as deep
+  [deep_support.py\ndeep_ready()] as deepsup
+  [markdown_blocks.py\nshared scanner + resolver] as mdblocks
+}
+
+package "Reporting (see component-reporting)" {
+  [reporting.py\nrender() shim] as reporting
+  [telemetry/\nReportModel, template loader+engine,\nextensions, classify] as telemetry
+}
+
+package "Inputs and outputs (file system)" {
+  database "Markdown corpus" as corpus
+  database "docsentinel.toml / doc_sentinel.toml\npyproject.toml [tool.doc_sentinel]" as cfgfiles
+  database "Baseline JSON" as basefile
+  database "User templates dir\n(report_templates_dir)" as tpldir
+}
+
+cloud "Optional extras" as extras {
+  [scikit-learn, textstat, docsig\n(extra: standard)] as stdext
+  [spaCy, textacy\n(extra: deep)] as deepext
+}
+
+precommit ..> cli : runs "docsentinel scan"
+cli --> engine
+api --> engine
+plugin --> engine
+cli --> reporting
+cli --> baseline : baseline cmd
+cli --> deepsup : doctor
+cli --> rules : rules cmd
+cli --> telemetry : template/extension\nresolution
+
+engine --> config
+engine --> discovery
+engine --> rules
+engine --> baseline : filter
+engine --> models
+engine --> standard : ensure_standard_loaded()
+engine --> deepsup : deep gate
+cli ..> errors
+rules <.. fast : register Rule + Analyzer
+rules <.. standard : register
+rules <.. deep : register (eager)
+fast --> mdblocks
+telemetry --> mdblocks : path resolver
+standard --> codedisc : DS204
+standard ..> stdext : imports
+deep ..> deepext : importlib, lazy
+deepsup ..> deepext : readiness probe
+reporting --> telemetry
+telemetry --> config
+telemetry --> rules : classify
+config --> cfgfiles : read
+discovery --> corpus : inventory
+baseline --> basefile : read/write
+telemetry --> tpldir : read (containment-gated)
+
+note bottom of engine
+  Single entry point. Analyzers are called as
+  detect(root, documents) or detect(root, documents, config).
+  Deep: confirmation gate (deep_confirm, ~-~-i-understand-deep-is-heuristic,
+  DOCSENTINEL_DEEP_CONFIRM=1) then deep_ready(); advisory-only, exit 0.
+  Exit codes: 0 ok, 1 blocking findings, 2 config/scan failure.
+end note
+
+note bottom of fast
+  Fast profile: standard library only.
+  importing docsentinel.detectors registers all fast rules
+  and the DS301 rule (spaCy not imported).
+end note
+@enduml

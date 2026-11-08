@@ -1,0 +1,118 @@
+@startuml component-detectors
+title DocSentinel - detectors by profile (src/docsentinel/detectors)
+left to right direction
+skinparam componentStyle rectangle
+skinparam shadowing false
+skinparam packageStyle rectangle
+
+[rules.py\nregister_rule / ANALYZERS] as rules
+[config.py] as config
+[markdown_blocks.py\nscan_markdown, resolve_local_reference,\nMarkdownBlockIndex] as mdb
+[path_boundaries.py (DS116)\ncontained_path, is_ds116_owned,\nescapes_via_symlink] as pb
+
+package "Fast DS1xx - stdlib only, imported eagerly by detectors package init" {
+  package "Use the shared scanner" {
+    [anchors.py DS104] as ds104
+    [headings.py DS105] as ds105
+    [sections.py DS106] as ds106
+    [references.py DS108] as ds108
+    [fences.py DS109] as ds109
+    [fence_languages.py DS110\nopt-in: require_fence_languages] as ds110
+    [navigation.py DS112\nopt-in: navigation_indexes] as ds112
+    [assets.py DS113] as ds113
+    [deprecated_refs.py DS115\nopt-in: deprecated_references_file] as ds115
+    [tables.py DS117] as ds117
+  }
+  package "Scanner-free" {
+    [links.py DS101] as ds101
+    [comments.py DS102] as ds102
+    [paths.py DS103] as ds103
+    [document_ids.py DS114\nown frontmatter reader] as ds114
+    [naming.py DS118\nopt-in: documentation_naming\npath strings only] as ds118
+  }
+}
+
+package "Standard DS2xx - lazy: detectors/loader.py ensure_standard_loaded()" {
+  [complexity.py DS201] as ds201
+  [duplication.py DS202] as ds202
+  [low_information.py DS203] as ds203
+  [signatures.py DS204] as ds204
+  [corpus.py\nbuild_corpus_model (lru_cache)] as corpus
+}
+
+package "Deep DS301 - opt-in gate, advisory-only" {
+  [contradictions.py DS301\nrule registered eagerly] as ds301
+  [_triples.py\nextract_claims] as triples
+  [deep_support.py\ndeep_ready()] as deepsup
+}
+
+[code_discovery.py] as codedisc
+[detectors/loader.py] as loader
+[errors.py\nExtraNotInstalledError] as errors
+
+cloud "extra: standard" {
+  [scikit-learn] as sk
+  [textstat] as ts
+  [docsig] as docsig
+}
+cloud "extra: deep" {
+  [spaCy] as spacy
+  [textacy] as textacy
+}
+
+ds104 --> mdb
+ds105 --> mdb
+ds106 --> mdb
+ds108 --> mdb
+ds109 --> mdb
+ds110 --> mdb
+ds112 --> mdb
+ds113 --> mdb
+ds115 --> mdb
+ds117 --> mdb
+pb --> mdb
+
+ds101 --> pb : contained_path,\nis_ds116_owned
+ds103 --> pb : contained_path
+ds112 --> pb
+ds113 --> pb
+ds115 --> pb
+
+ds112 ..> config : ConfigError (fail-closed)
+ds114 ..> config : ConfigError
+ds115 ..> config : ConfigError
+ds118 ..> config : ConfigError
+
+ds202 --> corpus
+ds203 --> corpus
+corpus ..> sk
+ds202 ..> sk
+ds201 ..> ts
+ds204 ..> docsig : importlib
+ds204 --> codedisc
+
+ds301 ..> deepsup
+ds301 ..> triples : importlib, first deep call
+triples ..> spacy
+triples ..> textacy : importlib
+deepsup ..> spacy : readiness probe
+deepsup ..> textacy
+
+loader ..> errors : ExtraNotInstalledError\nwhen sklearn/textstat/docsig missing
+
+ds101 ..> rules : each detector module\nregisters its Rule + Analyzer\nat import time
+ds301 ..> rules
+
+note right of pb
+  DS116 owns unsafe targets (escape, drive, UNC,
+  backslash, control). DS101/DS113/DS112/DS115
+  defer to it via is_ds116_owned.
+  Code-span scope is narrowed (Story 11.0).
+end note
+
+note bottom of ds301
+  Requires deep_confirm / ~-~-i-understand-deep-is-heuristic /
+  DOCSENTINEL_DEEP_CONFIRM=1, checked in engine.scan().
+  Heuristic candidates only; exit code stays 0.
+end note
+@enduml

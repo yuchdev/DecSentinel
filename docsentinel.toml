@@ -1,5 +1,5 @@
 baseline = ".docsentinel-baseline.json"
-exclude = [".git", ".venv", "node_modules", "dist", ".dist", "build", ".junie", "tests/assets/*"]
+exclude = [".git", ".venv", "node_modules", "dist", ".dist", "build", ".junie", "tests/assets/*", ".claude/skills/plantuml/*"]
 
 # DS201 scores come from textstat, whose syllable counts differ slightly between versions and
 # platforms. Baseline fingerprints include the printed score, so a threshold sitting right at a

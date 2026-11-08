@@ -1,0 +1,92 @@
+@startuml component-reporting
+title DocSentinel - reporting and telemetry (src/docsentinel/telemetry)
+left to right direction
+skinparam componentStyle rectangle
+skinparam shadowing false
+skinparam packageStyle rectangle
+
+[cli.py\nscan: format, template, extension options] as cli
+[reporting.py\nrender() shim - no format literals] as reporting
+[models.py\nScanResult, Finding] as models
+[config.py\nreport_* and telemetry_* options] as config
+[rules.py\nRULES] as rules
+[detectors/path_boundaries.py\ncontainment gate] as gate
+[markdown_blocks.py\nresolve_local_reference] as mdb
+
+package "telemetry/" {
+  [loader.py\nload_template -> immutable Template\n256 KiB cap, strict validation] as loader
+  [model.py\nReportModel.build -> JSON-shaped context,\nCONTEXT_SCHEMA] as model
+  [classify.py\nclassify -> fault_class, tier,\noutcome, domain] as classify
+  [engine.py\nrender_template (logic-less)] as tengine
+  [filters.py\nneutralize, gha_*, TemplateError,\napply_filter] as filters
+  [extensions.py\nresolve/admit_extensions,\nprovide_run/document/problem hooks] as ext
+  [events.py\nFaultEvent, SCHEMA_VERSION\n(no production caller yet)] as events
+
+  package "builtin/ (gate-free)" {
+    [domain.py\ndoc.domain from telemetry_domains] as bdomain
+    [document_stats.py\nproblem_count_per_kb, worst_documents] as bstats
+  }
+
+  package "templates/ (package data)" {
+    [text.json] as ttext
+    [github.json] as tgh
+    [json.json (schema 2)] as tjson
+    [json-v1.json (schema 1)] as tjson1
+    [json-documents.json] as tjdocs
+  }
+}
+
+database "User templates dir\n(report_templates_dir)" as userdir
+database "--template PATH\n(trusted invoker path)" as userfile
+component "python:<module>:<callable>\nextension (full trust, not a sandbox)" as pyext <<gated>>
+
+cli --> reporting : render(result, format, ...)
+cli --> loader : resolve template first\n(errors -> exit 2)
+cli --> ext : resolve_extensions
+reporting --> loader
+reporting --> model : ReportModel.build
+reporting --> tengine : render_template
+reporting --> filters : neutralize_text
+
+model --> classify
+model --> ext : apply_report_hooks
+model --> bdomain
+model --> models
+model --> config
+classify --> bdomain : domain_for
+classify --> rules
+tengine --> loader : Template nodes
+tengine --> filters
+tengine --> ext
+ext --> bdomain : builtin:domain
+ext --> bstats : builtin:document_stats
+bstats --> config
+bdomain --> config
+loader --> model : CONTEXT_SCHEMA
+loader --> filters
+loader --> gate : config-named files\nand dir checked first
+loader --> mdb
+loader --> ttext
+loader --> tgh
+loader --> tjson
+loader --> tjson1
+loader --> tjdocs
+loader ..> userdir : read after\ncontainment gate
+loader ..> userfile
+ext ..> pyext : importlib.import_module\n(only dynamic import site)
+config --> filters : neutralize
+
+note bottom of pyext
+  Trust gate: accepted ONLY on the command line and only with
+  ~-~-allow-python-extensions or DOCSENTINEL_ALLOW_PYTHON_EXTENSIONS=1
+  (read only in cli.py). Config cannot enable it (ConfigError).
+  Origin check refuses modules under scan/project root.
+  builtin:<name> needs no gate.
+end note
+
+note bottom of reporting
+  No hardcoded output format: layouts live in templates.
+  An AST tripwire test covers reporting.py and telemetry/engine.py.
+  Untrusted values reach a text sink only via neutralizing filters.
+end note
+@enduml
