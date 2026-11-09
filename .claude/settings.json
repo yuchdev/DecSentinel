@@ -34,8 +34,13 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "Bash",
+        "matcher": "Bash|mcp__github__.*",
         "hooks": [
+          {
+            "type": "command",
+            "command": "python $CLAUDE_PROJECT_DIR/.github/hooks/scripts/flakeforge_gate.py --host claude",
+            "timeout": 330
+          }
         ]
       },
       {
