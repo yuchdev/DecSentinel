@@ -22,7 +22,7 @@ uv run pytest tests/integration/test_scan.py::test_name -p docsentinel.pytest_pl
 uv run pytest tests/unit/                              # unit test suite
 uv run pytest tests/mock/                              # mock test suite
 uv run pytest tests/integration/                       # integration test suite
-uv run docsentinel scan PATH --format json             # CLI scan; json = schema 2 (also: text, github, json-v1 = old schema 1, json-documents; --template PATH; --extension builtin:domain)
+uv run docsentinel scan PATH --format json             # CLI scan; json = schema 2 (also: text, github, json-v1 = old schema 1, json-documents; --template PATH; --extension builtin:domain; --output/-o PATH writes the report to a file)
 uv run docsentinel scan --profile standard             # standard profile scan
 uv run docsentinel scan --profile deep --i-understand-deep-is-heuristic   # deep profile scan
 uv run docsentinel baseline PATH --output PATH        # baseline recording

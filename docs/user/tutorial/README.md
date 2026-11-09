@@ -148,12 +148,19 @@ docsentinel scan --ignore DS102
 # Standard human-readable table (default)
 docsentinel scan --format text
 
-# Machine-readable JSON output (Schema v1)
+# Machine-readable JSON output (schema 2; use --format json-v1 for schema 1)
 docsentinel scan --format json
 
 # GitHub Actions workflow annotations (::error, ::warning)
 docsentinel scan --format github
+
+# Write the report to a file instead of standard output (-o for short)
+docsentinel scan --format json --output reports/docsentinel.json
 ```
+
+`--output PATH` writes exactly what would have been printed (UTF-8, `\n` line endings), creating
+parent directories and overwriting an existing file. A relative path resolves against the current
+directory. The exit code still reflects the findings; a file that cannot be written exits `2`.
 
 For a field-by-field description of each format, with real sample output, see the [Report Formats guide](report.md).
 

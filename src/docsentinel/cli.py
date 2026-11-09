@@ -409,6 +409,17 @@ def main(argv: Optional[list[str]] = None) -> int:
         help="Render with this template file (wins over --format)",
     )
     scan_parser.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help=(
+            "Write the report to this file (UTF-8, overwritten; parent directories are created) "
+            "instead of standard output; relative paths resolve against the current directory"
+        ),
+    )
+    scan_parser.add_argument(
         "--show-clean-documents",
         action="store_true",
         help="List documents without problems in the text report as well",
@@ -554,11 +565,31 @@ def main(argv: Optional[list[str]] = None) -> int:
         report = render(
             result, config=settings, template=template, root=directory, strict=args.strict, extensions=loaded
         )
+        if args.output is not None:
+            _write_report(args.output, report)
     except (ConfigError, ExtensionError, ValueError, OSError, TemplateError, NotImplementedError) as exc:
         print(f"Scan failed: {neutralize_text(str(exc))}", file=sys.stderr)
         return 2
-    print(report)
+    if args.output is None:
+        print(report)
     return _exit_code(result, strict=args.strict)
+
+
+def _write_report(output: Path, report: str):
+    """Write a rendered report to ``output`` exactly as ``print`` would emit it.
+
+    The file holds the report plus one trailing newline, encoded as UTF-8 with ``\\n`` line endings
+    on every platform, so a file report is byte-identical to redirected standard output on POSIX.
+    The report is rendered completely before this runs, so a template or scan failure never leaves
+    a truncated file behind.
+
+    :param output: The report path; a relative path resolves against the current directory.
+    :param report: The rendered report text.
+    :raises OSError: When the parent directory cannot be created or the file cannot be written.
+    """
+    path = output if output.is_absolute() else Path.cwd() / output
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(report + "\n", encoding="utf-8", newline="\n")
 
 
 if __name__ == "__main__":
