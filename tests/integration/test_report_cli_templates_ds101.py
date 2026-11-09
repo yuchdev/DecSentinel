@@ -161,7 +161,7 @@ def test_show_clean_documents_lists_clean_documents_in_text(
     assert not any(line.startswith("guide/clean.md") for line in hidden)
     assert any(line.startswith("guide/clean.md (") and line.endswith(" bytes)") for line in shown)
     assert configured == shown
-    assert any(line.startswith("  error: README.md: ") for line in shown)
+    assert any(line.startswith("  error: README.md:") for line in shown)
 
 
 def test_legacy_text_and_github_shapes_are_intentionally_gone(

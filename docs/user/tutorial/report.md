@@ -90,9 +90,9 @@ Documents: 2 (1 with problems)
 Enabled rules: ["DS101", "DS102", "DS103", "DS104", "DS105", "DS106", "DS108", "DS109", "DS110", "DS112", "DS113", "DS114", "DS115", "DS116", "DS117", "DS118"]
 12 fast rule(s) evaluated; opt-in rule(s) not enabled: DS110 (set require_fence_languages), DS112 (set navigation_indexes), DS115 (set deprecated_references_file), DS118 (set documentation_naming).
 README.md (74 bytes)
-  error: README.md: dangling link -> docs/nope.md
-  error: README.md: missing anchor '#nowhere' in this file
-  warning: README.md: stray HTML comment: '<!-- stray -->'
+  error: README.md:3:15: dangling link -> docs/nope.md
+  error: README.md:3:39: missing anchor '#nowhere' in this file
+  warning: README.md:5:1: stray HTML comment: '<!-- stray -->'
 ```
 
 The output is a plain list of lines, always in this order:
@@ -106,25 +106,27 @@ The output is a plain list of lines, always in this order:
 | 5 | notice                                        | One sentence describing what was actually evaluated (see below).                                                     |
 | 6 | *(deep only)* advisory banner                 | Present only for the `deep` profile when it has findings. See [Deep profile differences](#deep-profile-differences). |
 | 7 | `PATH (N bytes)` for each document            | Not indented. Only documents with problems, in stable sorted order, unless `--show-clean-documents` is set.         |
-| 8 | `  SEVERITY: PATH: MESSAGE` under its document | Indented two spaces. One line per finding, directly under the document it belongs to.                              |
+| 8 | `  SEVERITY: PATH:LINE:COL: MESSAGE` under its document | Indented two spaces. One line per finding, directly under the document it belongs to. `:COL` is left out when the finding has no column, and `:LINE:COL` when it has no line. |
 | 9 | `Pending: REASON` for each pending reason     | Work that was requested but could not run, such as missing optional dependencies.                                   |
 
 ### Reading a finding line
 
 ```text
-  error: README.md: dangling link -> docs/nope.md
-  └─┬─┘  └───┬───┘  └─────────────┬──────────────┘
-severity    path               message
+  error: README.md:3:15: dangling link -> docs/nope.md
+  └─┬─┘  └───┬───┘ │ └┬┘ └─────────────┬──────────────┘
+severity    path line col           message
 ```
 
 - **`severity`** is `error` or `warning`. Errors fail the scan. Warnings fail it only with `--strict`.
 - **`path`** is relative to the scan root and uses `/` separators.
+- **`line`** and **`col`** are 1-based (the column counts code points). A finding without a column
+  prints `PATH:LINE:`, and a finding without a line (for example a corpus-level finding) prints
+  `PATH:`. Editors and terminals turn the `PATH:LINE:COL:` shape into a clickable location.
 - **`message`** is the detector's explanation. It often echoes a short excerpt of the source (here
   `'<!-- stray -->'`).
 
-The text format **omits the rule code and the line number**. Both exist on every finding. `json`
-shows the rule code, line and column, and `github` shows them in its `title=`, `line=` and `col=`
-properties. To find which rule produced a line, run `docsentinel scan --format json`, or search the
+The text format **omits the rule code**. `json` shows it, and `github` shows it in its `title=`
+property. To find which rule produced a line, run `docsentinel scan --format json`, or search the
 [Configuration Reference](../reference/configuration.md) for the message wording.
 
 ### The notice line
@@ -167,9 +169,9 @@ docsentinel scan --show-clean-documents
 ```text
 ...
 README.md (74 bytes)
-  error: README.md: dangling link -> docs/nope.md
-  error: README.md: missing anchor '#nowhere' in this file
-  warning: README.md: stray HTML comment: '<!-- stray -->'
+  error: README.md:3:15: dangling link -> docs/nope.md
+  error: README.md:3:39: missing anchor '#nowhere' in this file
+  warning: README.md:5:1: stray HTML comment: '<!-- stray -->'
 docs/setup.md (15 bytes)
 ```
 

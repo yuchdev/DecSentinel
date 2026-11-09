@@ -219,7 +219,7 @@ def test_text_findings_sit_under_their_document(case_name: str, asset_case: Call
         match = _FINDING_LINE.match(line)
         if match is not None:
             assert current is not None, line
-            assert line.startswith(f"  {match.group(1)}: {current}: ")
+            assert re.match(rf"  {match.group(1)}: {re.escape(current)}(:\d+){{0,2}}: ", line), line
             seen_findings += 1
         elif any(line == path or line.startswith(f"{path} (") for path in flagged):
             current = next(path for path in flagged if line == path or line.startswith(f"{path} ("))

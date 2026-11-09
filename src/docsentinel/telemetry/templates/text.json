@@ -43,8 +43,27 @@
           "body": [
             {
               "type": "line",
+              "when": { "var": "p.line", "eq": null },
               "text": "  {p.severity}: {doc.path|neutralize}: {p.message|neutralize}",
               "variables_used": ["p.severity", "doc.path", "p.message"]
+            },
+            {
+              "type": "group",
+              "when": { "var": "p.line", "ne": null },
+              "body": [
+                {
+                  "type": "line",
+                  "when": { "var": "p.column", "eq": null },
+                  "text": "  {p.severity}: {doc.path|neutralize}:{p.line}: {p.message|neutralize}",
+                  "variables_used": ["p.severity", "doc.path", "p.line", "p.message"]
+                },
+                {
+                  "type": "line",
+                  "when": { "var": "p.column", "ne": null },
+                  "text": "  {p.severity}: {doc.path|neutralize}:{p.line}:{p.column}: {p.message|neutralize}",
+                  "variables_used": ["p.severity", "doc.path", "p.line", "p.column", "p.message"]
+                }
+              ]
             }
           ]
         }
@@ -77,8 +96,27 @@
           "body": [
             {
               "type": "line",
+              "when": { "var": "p.line", "eq": null },
               "text": "  {p.severity}: {doc.path|neutralize}: {p.message|neutralize}",
               "variables_used": ["p.severity", "doc.path", "p.message"]
+            },
+            {
+              "type": "group",
+              "when": { "var": "p.line", "ne": null },
+              "body": [
+                {
+                  "type": "line",
+                  "when": { "var": "p.column", "eq": null },
+                  "text": "  {p.severity}: {doc.path|neutralize}:{p.line}: {p.message|neutralize}",
+                  "variables_used": ["p.severity", "doc.path", "p.line", "p.message"]
+                },
+                {
+                  "type": "line",
+                  "when": { "var": "p.column", "ne": null },
+                  "text": "  {p.severity}: {doc.path|neutralize}:{p.line}:{p.column}: {p.message|neutralize}",
+                  "variables_used": ["p.severity", "doc.path", "p.line", "p.column", "p.message"]
+                }
+              ]
             }
           ]
         }

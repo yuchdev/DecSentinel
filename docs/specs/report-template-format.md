@@ -128,8 +128,16 @@ Operators: `eq`, `ne`, `in`, `gt`, `lt`, `truthy`, `falsy`.
     { "type": "loop", "over": "documents_with_problems", "as": "doc", "placement": "block", "body": [
       { "type": "line", "text": "{doc.path|neutralize} ({doc.bytes} bytes)", "variables_used": ["doc.path", "doc.bytes"] },
       { "type": "loop", "over": "doc.problems", "as": "p", "placement": "block", "body": [
-        { "type": "line", "text": "  {p.severity}: {doc.path|neutralize}: {p.message|neutralize}",
-          "variables_used": ["p.severity", "doc.path", "p.message"] } ] } ] },
+        { "type": "line", "when": { "var": "p.line", "eq": null },
+          "text": "  {p.severity}: {doc.path|neutralize}: {p.message|neutralize}",
+          "variables_used": ["p.severity", "doc.path", "p.message"] },
+        { "type": "group", "when": { "var": "p.line", "ne": null }, "body": [
+          { "type": "line", "when": { "var": "p.column", "eq": null },
+            "text": "  {p.severity}: {doc.path|neutralize}:{p.line}: {p.message|neutralize}",
+            "variables_used": ["p.severity", "doc.path", "p.line", "p.message"] },
+          { "type": "line", "when": { "var": "p.column", "ne": null },
+            "text": "  {p.severity}: {doc.path|neutralize}:{p.line}:{p.column}: {p.message|neutralize}",
+            "variables_used": ["p.severity", "doc.path", "p.line", "p.column", "p.message"] } ] } ] } ] },
     { "type": "loop", "over": "pending", "as": "reason", "placement": "block", "body": [
       { "type": "line", "text": "Pending: {reason|neutralize}", "variables_used": ["reason"] } ] }
   ]

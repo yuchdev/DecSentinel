@@ -144,7 +144,7 @@ docsentinel scan --format text
 Documents: 2 (1 with problems)
 ...
 README.md (74 bytes)
-  error: README.md: dangling link -> docs/nope.md
+  error: README.md:3:15: dangling link -> docs/nope.md
 ```
 
 Clean documents are hidden. Add `--show-clean-documents` (or set

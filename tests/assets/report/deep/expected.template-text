@@ -5,4 +5,4 @@ Enabled rules: ["DS301"]
 1 deep rule(s) evaluated.
 Deep findings are heuristic candidates for review - they do not fail the build.
 docs/upgrade.md (640 bytes)
-  warning: docs/upgrade.md: Possible contradiction with docs/install.md:2: 'service requires Python 3.12' vs 'service requires Python 3.11'
+  warning: docs/upgrade.md:5: Possible contradiction with docs/install.md:2: 'service requires Python 3.12' vs 'service requires Python 3.11'

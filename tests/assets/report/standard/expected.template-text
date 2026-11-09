@@ -6,8 +6,8 @@ Enabled rules: ["DS201", "DS202", "DS203", "DS204"]
 docs/a.md (1024 bytes)
   warning: docs/a.md: Grade level 19.2 exceeds max_grade_level 18.0
 docs/b.md (2048 bytes)
-  warning: docs/b.md: Paragraph duplicates docs/a.md:4 (similarity 0.97)
-  warning: docs/b.md: Low-information paragraph (score 0.05)
+  warning: docs/b.md:9: Paragraph duplicates docs/a.md:4 (similarity 0.97)
+  warning: docs/b.md:15: Low-information paragraph (score 0.05)
 src/calc.py
-  error: src/calc.py: Docstring parameter 'y' does not exist in add(x)
+  error: src/calc.py:12: Docstring parameter 'y' does not exist in add(x)
 Pending: DS204: no docsig_paths configured
