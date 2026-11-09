@@ -85,9 +85,13 @@ and navigation list items).
 
 ## Resolver ownership
 
-`resolve_local_reference(root, document_path, raw_target)` in `markdown_blocks.py`
-is the **only** path resolver in the fast profile. It is purely lexical: it never
-opens a file, follows a symlink, or makes any filesystem call.
+`resolve_local_reference(root, document_path, raw_target, *, link_root=None)` in
+`markdown_blocks.py` is the **only** path resolver in the fast profile. It is purely
+lexical: it never opens a file, follows a symlink, or makes any filesystem call.
+A root-relative target (leading `/`) is joined onto `link_root` (the
+`link_root` option, resolved and bounded by the nearest `.git` ancestor once per scan by the engine with `docsentinel.link_root.resolve_link_root` and passed to detectors as `link_root=`; a detector without it falls back to the lexical `link_root_for`, which accepts only values meaning the scan root;
+`None` means the scan root) and its `..` is bounded by it. The result's `boundary`
+field names the root to use for symlink containment.
 
 The resolver classifies a target as one of:
 

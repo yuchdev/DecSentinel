@@ -72,6 +72,12 @@ from docsentinel.engine import scan
 from docsentinel.reporting import render
 from docsentinel.rules import rules_for_profile
 from tests.asset_helpers import AssetCase
+from tests.git_marker_helpers import (
+    GitMarkerGuard,
+    install_git_marker_guard,
+    is_git_marker_probe,
+    is_project_marker_probe,
+)
 from tests.mock.test_detectors_navigation_oracle import (
     _install_recorder,
     _is_under,
@@ -777,7 +783,9 @@ def test_ds116_owned_escape_target_is_never_statted(
     scan(root, config=config)  # warm up lazy imports before recording
 
     recorder = _Recorder()
+    guard = GitMarkerGuard(str(canonical))
     _install_recorder(monkeypatch, recorder)
+    install_git_marker_guard(monkeypatch, guard)
     result = scan(root, config=config)
 
     ds112 = _ds112(result.findings)
@@ -794,7 +802,11 @@ def test_ds116_owned_escape_target_is_never_statted(
     for recorded in recorder.paths:
         if recorded == tmp_real or _is_under(tmp_real, recorded):
             continue  # a realpath ancestor walk above the root is allowed
+        if is_git_marker_probe(recorded, str(canonical)) or is_project_marker_probe(recorded, str(canonical)):
+            assert recorded not in recorder.opened, f"opened a link_root probe: {recorded}"
+            continue  # link_root: an lstat existence check of <ancestor>/.git or a project marker only
         assert _is_under(recorded, str(canonical)), f"touched a path outside the scan root: {recorded}"
+    assert guard.violations == [], f"went past an existence check of a .git path: {guard.violations}"
 
 
 def test_fake_nav_in_fence_is_ignored_but_a_plain_list_link_fires(tmp_path: Path):
@@ -1106,7 +1118,7 @@ def test_reports_are_stable_across_formats(asset_case: Callable[[str, str], Asse
 
     text = render(result, "text")
     assert render(result, "text") == text
-    assert "warning: README.md: navigation target does not exist: docs/missing.md" in text
+    assert "warning: README.md:5: navigation target does not exist: docs/missing.md" in text
 
     payload = json.loads(render(result, "json-v1"))
     assert payload["schema_version"] == 1

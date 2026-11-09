@@ -912,7 +912,7 @@ def test_reports_are_stable_across_formats(asset_case: Callable[[str, str], Asse
 
     text = render(result, "text")
     assert render(result, "text") == text
-    assert 'error: b.md: duplicate document id "alpha" (already declared in a.md)' in text
+    assert 'error: b.md:2: duplicate document id "alpha" (already declared in a.md)' in text
 
     payload = json.loads(render(result, "json-v1"))
     assert payload["schema_version"] == 1

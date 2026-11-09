@@ -208,8 +208,7 @@ Clean documents are **included** with `"problems": []`: the denominator is what
 turns a fault count into a fault *rate*. `summary.documents` and
 `summary.documents_with_problems` count inventory documents only; a document entry
 appended for an out-of-inventory finding path (`bytes: null`) is listed in
-`documents` but not counted. The bare list-of-documents shape from the
-original request ships as the example template `json-documents.json`.
+`documents` but not counted.
 
 ## 6. Context schema
 

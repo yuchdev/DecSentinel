@@ -45,6 +45,9 @@ TEMPLATE = (
     "# min_document_words = 50         # DS201: skip documents with fewer prose words\n"
     "# min_paragraph_words = 5         # DS202/DS203: skip paragraphs with fewer words\n"
     "# min_paragraph_chars = 30        # DS202/DS203: skip paragraphs shorter than this\n"
+    "\n"
+    '# Base for site-root-absolute links (/docs/x.md): "auto" = nearest .git ancestor, "." = scan root.\n'
+    '# link_root = "auto"\n'
 )
 
 
@@ -393,6 +396,17 @@ def main(argv: Optional[list[str]] = None) -> int:
     scan_parser.add_argument("--ignore", type=str, default=None)
     scan_parser.add_argument("--baseline", type=Path, default=None)
     scan_parser.add_argument(
+        "--link-root",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help=(
+            "Directory that site-root-absolute links (/docs/x.md) resolve against: an absolute path or one "
+            "relative to the current directory; must be the scan root or an ancestor (not /). Trusted; "
+            "overrides link_root in the config."
+        ),
+    )
+    scan_parser.add_argument(
         "--format",
         default=DEFAULT_TEMPLATE,
         metavar="NAME",
@@ -452,6 +466,17 @@ def main(argv: Optional[list[str]] = None) -> int:
     baseline_parser.add_argument("--config", type=Path)
     baseline_parser.add_argument("--output", type=Path)
     baseline_parser.add_argument("--profile", choices=("fast", "standard", "deep"))
+    baseline_parser.add_argument(
+        "--link-root",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help=(
+            "Directory that site-root-absolute links (/docs/x.md) resolve against: an absolute path or one "
+            "relative to the current directory; must be the scan root or an ancestor (not /). Trusted; "
+            "overrides link_root in the config."
+        ),
+    )
     init_parser = commands.add_parser("init", help="Create a starter config")
     init_parser.add_argument(
         "root", nargs="?", default=".", help="Directory for docsentinel.toml (default: current directory)"
@@ -522,7 +547,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                 output_path = directory / ".docsentinel-baseline.json"
 
             unbaselined_config = replace(settings, baseline=None)
-            result = scan(args.root, config=unbaselined_config)
+            overrides = {} if args.link_root is None else {"link_root": args.link_root}
+            result = scan(args.root, config=unbaselined_config, **overrides)
             save_baseline(output_path, result.findings)
         except (ConfigError, ValueError, OSError) as exc:
             print(f"Baseline generation failed: {neutralize_text(str(exc))}", file=sys.stderr)
@@ -561,7 +587,9 @@ def main(argv: Optional[list[str]] = None) -> int:
             settings = replace(settings, telemetry_extensions=loaded.builtin_specs)
         template = _report_template(args.format, args.template, settings, directory)
         check_template(template, loaded)
-        result = scan(args.root, config=settings)
+        # Pass link_root only when given, so callers wrapping scan() keep working.
+        overrides = {} if args.link_root is None else {"link_root": args.link_root}
+        result = scan(args.root, config=settings, **overrides)
         report = render(
             result, config=settings, template=template, root=directory, strict=args.strict, extensions=loaded
         )

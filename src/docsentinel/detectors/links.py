@@ -1,11 +1,14 @@
 """Detect dangling Markdown links and anchors."""
 
+import os
 import re
 from pathlib import Path
 from typing import Optional
 
 from docsentinel import models, rules
+from docsentinel.config import Config
 from docsentinel.detectors.path_boundaries import contained_path, is_ds116_owned
+from docsentinel.link_root import link_root_for
 
 DS101 = rules.register_rule(
     rules.Rule(
@@ -24,6 +27,13 @@ _HEADING_RE = re.compile(r"^ {0,3}(#{1,6})\s+(.*?)\s*#*\s*$")
 _SCHEME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*:")
 _HTML_ANCHOR_RE = re.compile(r'<a\s+[^>]*?(?:id|name)=["\']([^"\']+)["\']', re.I)
 
+#: Most characters read from a linked Markdown file *outside the scan root* (reached
+#: through the link root) to collect its anchors, matching the DS115 mapping cap. A
+#: larger file, or one that is not UTF-8, skips the anchor check instead of stalling
+#: or failing the scan (the link itself still resolves). In-root targets keep the
+#: historical read, whose errors propagate.
+_MAX_ANCHOR_SOURCE_CHARS = 1_000_000
+
 
 def _read_lines(path: Path) -> list[str]:
     """Read UTF-8 text from a path as logical lines."""
@@ -41,12 +51,21 @@ def slugify(heading_text: str) -> str:
 
 def heading_anchors(path: Path) -> set[str]:
     """Return heading slugs and explicit HTML anchors found in a Markdown file."""
+    return _anchors_from_lines(_read_lines(path))
+
+
+def _anchors_from_lines(lines: list[str]) -> set[str]:
+    """Return heading slugs and explicit HTML anchors found in Markdown lines.
+
+    :param lines: The document's logical lines.
+    :returns: The anchor set.
+    """
     anchors: set[str] = set()
     seen: dict[str, int] = {}
     in_fence = False
     fence_marker: Optional[str] = None
 
-    for line in _read_lines(path):
+    for line in lines:
         fence = _FENCE_RE.match(line)
         if fence:
             marker = fence.group(1)[0]
@@ -68,6 +87,29 @@ def heading_anchors(path: Path) -> set[str]:
     return anchors
 
 
+def _linked_anchors(path: Path) -> Optional[set[str]]:
+    """Return the anchors of a linked Markdown file, or ``None`` to skip the anchor check.
+
+    The read is bounded to :data:`_MAX_ANCHOR_SOURCE_CHARS`; an oversized, non-UTF-8 or
+    unreadable file yields ``None`` rather than a truncated (and so misleading) anchor
+    set or a scan failure.
+
+    :param path: The resolved, existing linked file.
+    :returns: Its anchor set, or ``None`` when it cannot be read within the bound.
+    """
+    text: Optional[str]
+    try:
+        with path.open(encoding="utf-8") as stream:
+            text = stream.read(_MAX_ANCHOR_SOURCE_CHARS + 1)
+    except (OSError, UnicodeDecodeError):
+        # An unreadable or non-UTF-8 linked file: its anchors are unknown, so the
+        # caller skips the anchor check rather than failing the whole scan.
+        text = None
+    if text is None or len(text) > _MAX_ANCHOR_SOURCE_CHARS:
+        return None
+    return _anchors_from_lines(text.splitlines())
+
+
 def _is_skippable(target: str) -> bool:
     """Return whether a target should not be resolved as a local file."""
     if not target:
@@ -83,14 +125,14 @@ def _is_skippable(target: str) -> bool:
     return bool(_SCHEME_RE.match(target))
 
 
-def _resolve(target_path: str, source: Path, root: Path) -> Path:
-    """Resolve a link file part relative to the scan root or source document."""
+def _resolve(target_path: str, source: Path, root: Path, link_root: Optional[Path] = None) -> Path:
+    """Resolve a link file part relative to the link root (``/`` targets) or source document."""
     if target_path.startswith("/"):
-        return (root / target_path.lstrip("/")).resolve()
+        return ((link_root or root) / target_path.lstrip("/")).resolve()
     return (source.parent / target_path).resolve()
 
 
-def _lexical_target(target_path: str, source: Path, root: Path) -> Path:
+def _lexical_target(target_path: str, source: Path, root: Path, link_root: Optional[Path] = None) -> Path:
     """Join a link file part to its base **without** resolving symlinks or ``..``.
 
     This mirrors :func:`_resolve`'s join rules but omits ``Path.resolve`` (which
@@ -100,13 +142,17 @@ def _lexical_target(target_path: str, source: Path, root: Path) -> Path:
     path is handed to :func:`~docsentinel.detectors.path_boundaries.escapes_via_symlink`
     first so a root escape or an in-root symlink pointing outside is never stat-ed.
 
+    A site-root-absolute (``/``) target is joined onto ``link_root``, the repository
+    base GitHub resolves ``/`` against; ``None`` keeps the historical scan-root join.
+
     :param target_path: The link file part (fragment already removed).
     :param source: The absolute path of the referring document.
     :param root: The scan root directory.
+    :param link_root: Base for ``/`` targets, or ``None`` for ``root``.
     :returns: The unresolved join of the target against its base.
     """
     if target_path.startswith("/"):
-        return root / target_path.lstrip("/")
+        return (link_root or root) / target_path.lstrip("/")
     return source.parent / target_path
 
 
@@ -132,8 +178,18 @@ def _strip_code_spans(raw_line: str) -> tuple[str, list[int]]:
     return "".join(kept), offsets
 
 
-def check_document(root: Path, document: models.Document) -> tuple[models.Finding, ...]:
-    """Return dangling link and anchor findings for one Markdown document."""
+def check_document(
+    root: Path, document: models.Document, *, link_root: Optional[Path] = None
+) -> tuple[models.Finding, ...]:
+    """Return dangling link and anchor findings for one Markdown document.
+
+    :param root: The scan root directory.
+    :param document: The document to inspect.
+    :param link_root: Precomputed base for ``/`` targets; ``None`` uses the default
+        config's lexical link root (the scan root).
+    :returns: Findings in source order.
+    """
+    base = link_root if link_root is not None else link_root_for(Path(os.path.realpath(root)), Config())
     source = root / document.path
     findings: list[models.Finding] = []
     in_fence = False
@@ -167,7 +223,7 @@ def check_document(root: Path, document: models.Document) -> tuple[models.Findin
             # control) is handed to DS116 so DS101 never stats a path outside the
             # scan root (the existence oracle fixed in Story 11.0). Every other
             # target keeps DS101's exact legacy behavior below.
-            if is_ds116_owned(root, document.path, target):
+            if is_ds116_owned(root, document.path, target, link_root=base):
                 continue
 
             file_part, _, anchor = target.partition("#")
@@ -188,11 +244,13 @@ def check_document(root: Path, document: models.Document) -> tuple[models.Findin
                     )
                 continue
 
-            candidate = _lexical_target(file_part, source, root)
+            candidate = _lexical_target(file_part, source, root, base)
             # Never follow an in-root symlink whose target escapes the root, and
             # never stat a lexical escape; DS116 owns both. The returned path has
             # symlinks and ``..`` safely resolved before any filesystem operation.
-            resolved = contained_path(root, candidate)
+            # A ``/`` target is contained by the link root instead of the scan root.
+            boundary = base if file_part.startswith("/") else root
+            resolved = contained_path(boundary, candidate)
             if resolved is None:
                 continue
             if not resolved.exists():
@@ -210,7 +268,18 @@ def check_document(root: Path, document: models.Document) -> tuple[models.Findin
                 )
                 continue
             if anchor and resolved.is_file() and resolved.suffix == ".md":
-                anchors = anchor_cache.setdefault(resolved, heading_anchors(resolved))
+                if resolved not in anchor_cache:
+                    if resolved.is_relative_to(root):
+                        # In-root target: read exactly as before (errors propagate).
+                        anchor_cache[resolved] = heading_anchors(resolved)
+                    else:
+                        # Outside the scan root, reached through the link root: a
+                        # bounded read that skips an oversized or undecodable file.
+                        linked = _linked_anchors(resolved)
+                        if linked is None:
+                            continue
+                        anchor_cache[resolved] = linked
+                anchors = anchor_cache[resolved]
                 if anchor not in anchors:
                     findings.append(
                         models.Finding(
@@ -227,10 +296,31 @@ def check_document(root: Path, document: models.Document) -> tuple[models.Findin
     return tuple(findings)
 
 
-def detect(root: Path, documents: tuple[models.Document, ...]) -> tuple[models.Finding, ...]:
-    """Return DS101 findings for Markdown documents in their supplied order."""
+def detect(
+    root: Path,
+    documents: tuple[models.Document, ...],
+    config: Optional[Config] = None,
+    *,
+    link_root: Optional[Path] = None,
+) -> tuple[models.Finding, ...]:
+    """Return DS101 findings for Markdown documents in their supplied order.
+
+    :param root: The scan root directory.
+    :param documents: Documents to inspect in their supplied order.
+    :param config: Effective settings supplying ``link_root``; ``None`` uses defaults.
+    :param link_root: The engine-validated base for ``/`` targets; ``None`` falls back
+        to :func:`~docsentinel.link_root.link_root_for`, which accepts only values
+        meaning the scan root.
+    :returns: Findings across all documents in document then source order.
+    :raises ConfigError: When ``link_root`` is invalid for this scan root.
+    """
+    settings = config if config is not None else Config()
+    base = link_root if link_root is not None else link_root_for(Path(os.path.realpath(root)), settings)
     return tuple(
-        finding for document in documents if document.path.endswith(".md") for finding in check_document(root, document)
+        finding
+        for document in documents
+        if document.path.endswith(".md")
+        for finding in check_document(root, document, link_root=base)
     )
 
 

@@ -3,12 +3,15 @@
 Multi-backtick spans are not parsed; only the specified single-backtick pattern is supported.
 """
 
+import os
 import re
 from pathlib import Path, PureWindowsPath
 from typing import Optional
 
 from docsentinel import models, rules
+from docsentinel.config import Config
 from docsentinel.detectors.path_boundaries import contained_path
+from docsentinel.link_root import link_root_for
 
 DS103 = rules.register_rule(
     rules.Rule(
@@ -74,16 +77,16 @@ def _looks_path_like(candidate: str) -> bool:
     return not _is_excluded(candidate) and ("/" in candidate or bool(_EXTENSION_RE.search(candidate)))
 
 
-def _resolve(candidate: str, source: Path, root: Path) -> Optional[Path]:
-    """Resolve a candidate relative to the scan root or source document."""
+def _resolve(candidate: str, source: Path, root: Path, link_root: Optional[Path] = None) -> Optional[Path]:
+    """Resolve a candidate relative to the link root (``/`` candidates) or source document."""
     if candidate.startswith("/"):
-        return (root / candidate.lstrip("/")).resolve()
+        return ((link_root or root) / candidate.lstrip("/")).resolve()
     if PureWindowsPath(candidate).anchor:
         return None
     return (source.parent / candidate).resolve()
 
 
-def _lexical_candidate(candidate: str, source: Path, root: Path) -> Optional[Path]:
+def _lexical_candidate(candidate: str, source: Path, root: Path, link_root: Optional[Path] = None) -> Optional[Path]:
     """Join a path-like code span to its base **without** resolving symlinks or ``..``.
 
     This mirrors :func:`_resolve`'s join rules but omits ``Path.resolve`` (which
@@ -94,13 +97,16 @@ def _lexical_candidate(candidate: str, source: Path, root: Path) -> Optional[Pat
     :func:`~docsentinel.detectors.path_boundaries.escapes_via_symlink` before any
     ``stat``. Windows-anchored candidates still yield ``None`` as in :func:`_resolve`.
 
+    A ``/`` candidate is joined onto ``link_root`` (``None`` keeps the scan root).
+
     :param candidate: The code-span text.
     :param source: The absolute path of the referring document.
     :param root: The scan root directory.
+    :param link_root: Base for ``/`` candidates, or ``None`` for ``root``.
     :returns: The unresolved join, or ``None`` for a Windows-anchored candidate.
     """
     if candidate.startswith("/"):
-        return root / candidate.lstrip("/")
+        return (link_root or root) / candidate.lstrip("/")
     if PureWindowsPath(candidate).anchor:
         return None
     return source.parent / candidate
@@ -117,13 +123,26 @@ def _link_label_spans(text: str) -> tuple[tuple[int, int], ...]:
     return tuple(spans)
 
 
-def detect(root: Path, documents: tuple[models.Document, ...]) -> tuple[models.Finding, ...]:
+def detect(
+    root: Path,
+    documents: tuple[models.Document, ...],
+    config: Optional[Config] = None,
+    *,
+    link_root: Optional[Path] = None,
+) -> tuple[models.Finding, ...]:
     """Return DS103 findings for Markdown documents in their supplied order.
 
     :param root: The scan root directory.
     :param documents: Documents to inspect in their supplied order.
+    :param config: Effective settings supplying ``link_root``; ``None`` uses defaults.
+    :param link_root: The engine-validated base for ``/`` targets; ``None`` falls back
+        to :func:`~docsentinel.link_root.link_root_for`, which accepts only values
+        meaning the scan root.
     :returns: Findings with one-based code-point locations.
+    :raises ConfigError: When ``link_root`` is invalid for this scan root.
     """
+    settings = config if config is not None else Config()
+    base = link_root if link_root is not None else link_root_for(Path(os.path.realpath(root)), settings)
     findings: list[models.Finding] = []
     for document in documents:
         if not document.path.endswith(".md"):
@@ -158,7 +177,7 @@ def detect(root: Path, documents: tuple[models.Document, ...]) -> tuple[models.F
             if not _looks_path_like(candidate) or _is_excluded(candidate):
                 continue
 
-            lexical = _lexical_candidate(candidate, source, root)
+            lexical = _lexical_candidate(candidate, source, root, base)
             # Security skip (Story 11.0 code-span ruling): DS116 owns only a code
             # span that escapes the root or reaches outside through an in-root
             # symlink, so DS103 hands those two to DS116 and never stats a path
@@ -168,7 +187,9 @@ def detect(root: Path, documents: tuple[models.Document, ...]) -> tuple[models.F
             # Windows-anchored candidate yields ``resolved is None`` and is reported
             # as before, with no filesystem access). A root escape is skipped with
             # zero filesystem calls and only the validated in-root path is stat-ed.
-            resolved = contained_path(root, lexical) if lexical is not None else None
+            # A ``/`` span is contained by the link root instead of the scan root.
+            boundary = base if candidate.startswith("/") else root
+            resolved = contained_path(boundary, lexical) if lexical is not None else None
             if lexical is not None and resolved is None:
                 continue
             if resolved is not None and resolved.exists():

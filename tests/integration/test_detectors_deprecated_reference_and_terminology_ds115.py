@@ -1417,7 +1417,7 @@ def test_reports_are_stable_across_formats(asset_case: Callable[[str, str], Asse
 
     text = render(result, "text")
     assert render(result, "text") == text
-    assert f"warning: README.md: {expected}" in text
+    assert f"warning: README.md:3: {expected}" in text
     assert "\x00" not in text and "\x1b" not in text
     assert str(Path(os.path.realpath(loaded.root))) not in text
 

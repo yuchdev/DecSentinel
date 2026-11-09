@@ -60,7 +60,7 @@
                 {
                   "type": "line",
                   "when": { "var": "p.column", "ne": null },
-                  "text": "  {p.severity}: {doc.path|neutralize}:{p.line}:{p.column}: {p.message|neutralize}",
+                  "text": "  {p.severity}: {doc.path|neutralize}:line {p.line}:col {p.column}: {p.message|neutralize}",
                   "variables_used": ["p.severity", "doc.path", "p.line", "p.column", "p.message"]
                 }
               ]

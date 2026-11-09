@@ -66,6 +66,12 @@ from docsentinel.engine import scan
 from docsentinel.reporting import render
 from docsentinel.rules import rules_for_profile
 from tests.asset_helpers import AssetCase
+from tests.git_marker_helpers import (
+    GitMarkerGuard,
+    install_git_marker_guard,
+    is_git_marker_probe,
+    is_project_marker_probe,
+)
 from tests.mock.test_path_boundaries_oracle import _is_under, _symlink_or_skip
 from tests.timing_helpers import assert_scales_linearly
 
@@ -498,8 +504,10 @@ def test_symlink_outside_is_ds116_only_and_never_statted(
     scan(root, config=Config(profile="fast"))
 
     recorder = _FsRecorder()
+    guard = GitMarkerGuard(str(canonical))
     with pytest.MonkeyPatch.context() as patch:
         _install_fs_recorder(patch, recorder)
+        install_git_marker_guard(patch, guard)
         result = scan(root, config=Config(profile="fast"))
 
     assert _ds113(result.findings) == ()
@@ -512,9 +520,15 @@ def test_symlink_outside_is_ds116_only_and_never_statted(
     for recorded in recorder.touched:
         assert recorded != secret_real, f"stat-ed the out-of-root secret: {recorded}"
         assert not _is_under(recorded, outside_str), f"stat-ed a path under the out-of-root tree: {recorded}"
+        if is_git_marker_probe(recorded, root_str) or is_project_marker_probe(recorded, root_str):
+            continue  # link_root: an lstat existence check of <ancestor>/.git or a project marker only
         assert _is_under(recorded, root_str) or _is_under(root_str, recorded), f"stat-ed outside the root: {recorded}"
     assert secret_real not in recorder.opened, "opened the out-of-root secret"
     assert evil_real not in recorder.opened, "opened the in-root symlink asset"
+    assert not any(
+        is_git_marker_probe(opened, root_str) or is_project_marker_probe(opened, root_str) for opened in recorder.opened
+    ), "opened a link_root probe"
+    assert guard.violations == [], f"went past an existence check of a .git path: {guard.violations}"
 
 
 def test_in_root_symlink_to_regular_file_is_a_valid_asset(tmp_path: Path):
@@ -962,7 +976,7 @@ def test_reports_are_stable_across_formats(asset_case: Callable[[str, str], Asse
 
     text = render(result, "text")
     assert render(result, "text") == text
-    assert "error: README.md: missing asset: media/missing.png" in text
+    assert "error: README.md:5: missing asset: media/missing.png" in text
 
     payload = json.loads(render(result, "json-v1"))
     assert payload["schema_version"] == 1

@@ -227,6 +227,25 @@ An unknown format name or an invalid template prints `Scan failed: ...` on stder
 [Report Formats](report.md#custom-templates) and the
 [report template format](../../specs/report-template-format.md).
 
+### Site-root links: `--link-root`
+
+A link starting with `/` resolves against the link root, by default the
+nearest directory holding `.git` (see `link_root` in the configuration
+reference). `--link-root PATH` overrides it for one run, for example when the
+docs are not in a git repository. PATH is absolute or relative to the current
+directory and must be the scan root or one of its ancestors (never the
+filesystem root). The flag is trusted invoker input and wins over the
+configuration; a bad value exits with code `2`. A `link_root` in a
+configuration file is bounded instead (the nearest `.git`, or an ancestor
+holding a project marker).
+
+Because the flag is trusted, never put `--link-root` in pre-commit `args:` or in
+a `pull_request_target` workflow, where a contributor could choose it.
+
+```bash
+docsentinel scan docs --link-root .
+```
+
 ---
 
 ## Strict Mode and Exit Codes

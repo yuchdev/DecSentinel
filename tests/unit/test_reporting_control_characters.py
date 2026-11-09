@@ -200,7 +200,7 @@ def test_ordinary_unicode_and_ascii_render_byte_identically():
     assert _neutralize_controls("Broken anchor -> #section", keep_crlf=True) == "Broken anchor -> #section"
     result = _result((Finding(rule="DS101", path="docs/intro.md", message="Dangling link", severity="error", line=7),))
     assert render(result, "github") == "::error file=docs/intro.md,line=7,title=DS101::Dangling link"
-    assert "error: docs/intro.md: Dangling link" in render(result, "text")
+    assert "error: docs/intro.md:7: Dangling link" in render(result, "text")
 
 
 def test_escape_helpers_preserve_percent_cr_lf_colon_comma():

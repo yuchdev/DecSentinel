@@ -11,6 +11,7 @@ from docsentinel.config import Config, load_config
 from docsentinel.deep_support import DEEP_EXTRA_HINT, deep_ready
 from docsentinel.detectors.loader import clear_standard_caches, ensure_standard_loaded
 from docsentinel.discovery import discover
+from docsentinel.link_root import LINK_ROOT_RULES, resolve_invoker_link_root, resolve_link_root
 from docsentinel.models import Document, Finding, ScanResult
 from docsentinel.rules import ANALYZERS, RULES, effective_rules, opt_in_satisfied
 
@@ -90,6 +91,28 @@ def _analyzer_config_mode(analyzer: Analyzer) -> str:
     return _CONFIG_NONE
 
 
+@lru_cache(maxsize=256)
+def _analyzer_accepts_link_root(analyzer: Analyzer) -> bool:
+    """Return True when an analyzer declares a keyword-acceptable ``link_root`` parameter.
+
+    Analyzers that resolve site-root-absolute (``/``) targets accept the engine's
+    validated link root as ``link_root=``; every other analyzer is called exactly as
+    before. Signatures that cannot be introspected are treated as not accepting it.
+
+    :param analyzer: A registered analyzer callable.
+    :returns: True when ``link_root`` is forwarded by keyword.
+    """
+    try:
+        parameter = inspect.signature(analyzer).parameters.get("link_root")
+    except (ValueError, TypeError):
+        # Not introspectable: it cannot declare link_root; call it the legacy way.
+        parameter = None
+    return parameter is not None and parameter.kind in (
+        inspect.Parameter.KEYWORD_ONLY,
+        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+    )
+
+
 def _analyzer_accepts_config(analyzer: Analyzer) -> bool:
     """Return True when the engine forwards effective config to an analyzer.
 
@@ -107,6 +130,7 @@ def _run_analyzer(
     directory: Path,
     documents: tuple[Document, ...],
     settings: Config,
+    link_root: Optional[Path] = None,
 ) -> tuple[Finding, ...]:
     """Invoke an analyzer, forwarding effective config when its signature accepts it.
 
@@ -114,14 +138,19 @@ def _run_analyzer(
     :param directory: The resolved scan root directory.
     :param documents: Discovered documents to inspect, in scan order.
     :param settings: Effective settings for this scan.
+    :param link_root: The engine-validated link root, forwarded as ``link_root=``
+        to analyzers that declare it; ``None`` forwards nothing.
     :returns: The analyzer's findings.
     """
+    extra: dict[str, Path] = {}
+    if link_root is not None and _analyzer_accepts_link_root(analyzer):
+        extra["link_root"] = link_root
     mode = _analyzer_config_mode(analyzer)
     if mode == _CONFIG_KEYWORD:
-        return analyzer(directory, documents, config=settings)
+        return analyzer(directory, documents, config=settings, **extra)
     if mode == _CONFIG_POSITIONAL:
-        return analyzer(directory, documents, settings)
-    return analyzer(directory, documents)
+        return analyzer(directory, documents, settings, **extra)
+    return analyzer(directory, documents, **extra)
 
 
 def _env_confirms() -> bool:
@@ -156,8 +185,24 @@ def evaluated_notice(profile: str, rules_evaluated: int, opt_in_off: tuple[tuple
     return f"{notice}."
 
 
-def scan(root: Union[Path, str] = ".", *, config: Optional[Config] = None) -> ScanResult:
-    """Inventory documents and run registered analyzers, without implicit deep checks."""
+def scan(
+    root: Union[Path, str] = ".",
+    *,
+    config: Optional[Config] = None,
+    link_root: Optional[Union[Path, str]] = None,
+) -> ScanResult:
+    """Inventory documents and run registered analyzers, without implicit deep checks.
+
+    :param root: The directory or single file to scan.
+    :param config: Settings to use verbatim, or ``None`` to load them from ``root``.
+    :param link_root: Trusted invoker override for the base of site-root-absolute
+        (``/``) targets (``scan --link-root``): an absolute path or one relative to the
+        current directory that must resolve to an existing scan root or ancestor (not
+        the filesystem root). It wins over ``config.link_root``; ``None`` uses the
+        configured, bounded value.
+    :returns: The scan result.
+    :raises ConfigError: When the configured or invoker link root is invalid.
+    """
     target = Path(root).resolve()
     selected_file = target.is_file()
     directory = target.parent if selected_file else target
@@ -202,11 +247,22 @@ def scan(root: Union[Path, str] = ".", *, config: Optional[Config] = None) -> Sc
 
     profile_codes = tuple(code for code, rule in RULES.items() if rule.profile == settings.profile)
     active_codes = effective_rules(profile_codes, settings.select, settings.ignore)
+    # Resolve ``link_root`` once per scan (the ``.git`` walk runs a single time, and
+    # only when a rule that resolves ``/`` targets is active) and hand the validated
+    # directory to the analyzers that declare ``link_root``; an invalid or unbounded
+    # value fails closed with ConfigError before any analyzer runs.
+    # An invoker override is validated unconditionally (trusted input, fail closed).
+    if link_root is not None:
+        resolved_link_root: Optional[Path] = resolve_invoker_link_root(directory, link_root)
+    elif LINK_ROOT_RULES.intersection(active_codes):
+        resolved_link_root = resolve_link_root(directory, settings)
+    else:
+        resolved_link_root = None
     findings = tuple(
         finding
         for code in active_codes
         if code in ANALYZERS
-        for finding in _run_analyzer(ANALYZERS[code], directory, documents, settings)
+        for finding in _run_analyzer(ANALYZERS[code], directory, documents, settings, resolved_link_root)
     )
     if settings.baseline is not None:
         baseline_path = (

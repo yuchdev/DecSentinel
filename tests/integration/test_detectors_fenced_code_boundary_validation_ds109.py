@@ -336,7 +336,7 @@ def test_reports_are_stable_across_formats(asset_case: Callable[[str, str], Asse
 
     text = render(result, "text")
     assert render(result, "text") == text
-    assert "error: README.md: unclosed" in text
+    assert "error: README.md:5: unclosed" in text
 
     payload = json.loads(render(result, "json-v1"))
     assert payload["schema_version"] == 1

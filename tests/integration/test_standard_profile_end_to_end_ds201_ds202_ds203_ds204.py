@@ -447,7 +447,7 @@ def test_standard_scan_exit_code_one_for_ds204_error(
 
     assert main(["scan", str(case.root), "--profile", "standard"]) == 1
     captured = capsys.readouterr()
-    assert "error: src/pkg/bad.py: compute: SIG202" in captured.out
+    assert "error: src/pkg/bad.py:1: compute: SIG202" in captured.out
 
 
 def test_ds204_coexists_with_corpus_detectors(asset_case: Callable[[str, str], AssetCase]):

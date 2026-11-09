@@ -655,7 +655,7 @@ def test_reports_are_stable_across_formats(asset_case: Callable[[str, str], Asse
 
     text = render(result, "text")
     assert render(result, "text") == text
-    assert "warning: README.md: table body row has 3 cells; the header declares 2" in text
+    assert "warning: README.md:5: table body row has 3 cells; the header declares 2" in text
 
     payload = json.loads(render(result, "json-v1"))
     assert payload["schema_version"] == 1

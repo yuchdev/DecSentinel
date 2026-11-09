@@ -757,6 +757,61 @@ How DS116 treats Windows-style drive letters (`C:\`), UNC paths
 windows_path_policy = "portable"
 ```
 
+### `link_root`
+
+| Field | Value |
+|-------|-------|
+| Type | string |
+| Default | `"auto"` |
+| Valid values | `"auto"`, or a path relative to the scan root naming the scan root or a permitted ancestor (`"."`, `".."`, ...) |
+| Consumed by | DS101, DS103, DS112, DS113, DS116 |
+
+The directory that site-root-absolute targets (a link starting with `/`, such as
+one to the ADR index under the repository's docs directory) resolve against.
+GitHub resolves `/` against the repository root, so scanning only the docs
+directory must not join such a link onto that directory a second time.
+
+- `"auto"` (default): the nearest ancestor of the scan root, the scan root
+  included, that holds a `.git` directory or file (worktrees and submodules use
+  a `.git` file). Without one, the scan root is used, as before.
+- A relative path: `"."` keeps the scan root (MkDocs-style sites where `/`
+  means the docs directory); `".."` uses its parent. A configuration file is
+  supplied by the scanned repository, so its value is bounded: inside a git
+  repository it may not go above the nearest directory holding `.git`; outside
+  one, an ancestor is accepted only if that exact directory directly contains
+  a pyproject.toml, docsentinel.toml or doc_sentinel.toml file (checked for
+  existence only, never read). The filesystem root is always refused. Anything
+  else, or a missing directory, is a configuration error (exit code 2).
+- A git repository rooted at your home directory or above (a "dotfiles"
+  checkout) is not trusted as a link root: `"auto"` then uses the scan root, and
+  a configured ancestor is a configuration error.
+
+**Command line.** `docsentinel scan --link-root PATH` (also on `baseline`, and
+`docsentinel.scan(..., link_root=PATH)` in Python) sets the link root for one
+run and wins over the configuration. It is trusted invoker input, like
+`--template`: PATH is absolute or relative to the current directory, is
+resolved through symlinks, and must be an existing directory that is the scan
+root or one of its ancestors. No `.git` or project marker is needed; only the
+filesystem root is refused. Use it for docs that are not in a
+git repository, or to go further up than a configuration file may.
+
+Only `/` targets are affected; relative targets still resolve against the
+referring document. A `/` target inside the link root is a valid repository
+reference, even outside the scan root (a link to a source file while scanning
+only the docs directory), so DS116 does not report it; a `/` target whose `..`
+climbs above the link root is still an escape.
+
+**Trust.** `"auto"` trusts the enclosing git repository: DocSentinel checks
+whether `/` targets exist anywhere in it and reads the headings of linked
+Markdown files there. If you scan untrusted content that was extracted inside
+another repository (for example a downloaded archive unpacked into your
+checkout), its `/` links can reach files of that repository. Set
+`link_root = "."` for such scans so `/` stays within the scanned directory.
+
+```toml
+link_root = "auto"
+```
+
 ---
 
 ## Document identity options (DS114)
@@ -1068,6 +1123,7 @@ the rule that consumes it. All defaults were verified against
 | `root_escape_policy` | `"error"` | DS116 |
 | `decode_percent_paths` | `true` | DS116 |
 | `windows_path_policy` | `"portable"` | DS116 |
+| `link_root` | `"auto"` | DS101, DS103, DS112, DS113, DS116 |
 | `document_id_field` | `"id"` | DS114 |
 | `document_id_scope` | `"corpus"` | DS114 |
 | `document_id_case_sensitive` | `true` | DS114 |

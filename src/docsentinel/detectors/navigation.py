@@ -152,6 +152,7 @@ from typing import Optional
 from docsentinel import models, rules
 from docsentinel.config import Config, ConfigError
 from docsentinel.detectors.path_boundaries import escapes_via_symlink, is_ds116_owned
+from docsentinel.link_root import link_root_for
 from docsentinel.markdown_blocks import (
     MarkdownBlockIndex,
     ReferenceStatus,
@@ -419,6 +420,7 @@ def _analyze_index(
     root: Path,
     settings: Config,
     stat_cache: dict[str, bool],
+    link_root: Optional[Path] = None,
 ) -> tuple[list[models.Finding], set[str]]:
     """Analyze one navigation index, returning its findings and resolved identities.
 
@@ -435,6 +437,9 @@ def _analyze_index(
     :param root: The canonical scan root.
     :param settings: Effective configuration supplying the sub-check toggles.
     :param stat_cache: Memo for the missing-destination probe, shared across indexes.
+    :param link_root: Base and containment boundary for ``/`` navigation targets;
+        ``None`` uses ``root``. A ``/`` target inside the link root but outside the
+        scan root is a legitimate repository link, not an escape.
     :returns: ``(findings, identities)`` where ``identities`` is the set of resolved
         root-relative navigation target identities in this index.
     """
@@ -464,12 +469,12 @@ def _analyze_index(
             # An empty target or a fragment-only link to the same document is not an
             # extra navigation document target.
             continue
-        if is_ds116_owned(root, index_path, target):
+        if is_ds116_owned(root, index_path, target, link_root=link_root):
             # Lexical root escape or unsafe category: reported with zero filesystem
             # access (R4); DS116 independently reports it at error severity.
             record(line, f"{_ESCAPE_TEXT}: {_echo(target)}")
             continue
-        reference = resolve_local_reference(root, index_path, target)
+        reference = resolve_local_reference(root, index_path, target, link_root=link_root)
         if reference.status is ReferenceStatus.OUTSIDE_ROOT:
             record(line, f"{_ESCAPE_TEXT}: {_echo(target)}")
             continue
@@ -487,7 +492,7 @@ def _analyze_index(
         # never stat-ed; otherwise probe existence with a single memoised os.stat.
         if (
             settings.navigation_check_missing
-            and not escapes_via_symlink(root, reference.path)
+            and not escapes_via_symlink(reference.boundary if reference.boundary is not None else root, reference.path)
             and _destination_missing(reference.path, stat_cache)
         ):
             record(line, f"{_MISSING_TEXT}: {_echo(target)}")
@@ -512,9 +517,10 @@ def check_text(text: str, index_path: str, root: Path, config: Optional[Config] 
     :param root: The canonical scan root used for containment and the existence probe.
     :param config: Effective settings, or ``None`` for defaults.
     :returns: Findings in source order, one per offending navigation link.
+    :raises ConfigError: When ``link_root`` is invalid for this scan root.
     """
     settings = config if config is not None else Config()
-    findings, _identities = _analyze_index(text, index_path, root, settings, {})
+    findings, _identities = _analyze_index(text, index_path, root, settings, {}, link_root_for(root, settings))
     return tuple(findings)
 
 
@@ -592,6 +598,8 @@ def detect(
     root: Path,
     documents: tuple[models.Document, ...],
     config: Optional[Config] = None,
+    *,
+    link_root: Optional[Path] = None,
 ) -> tuple[models.Finding, ...]:
     """Return ``DS112`` findings across the configured navigation indexes.
 
@@ -609,15 +617,20 @@ def detect(
         which configured indexes may be opened.
     :param config: Effective settings; the engine passes this, and direct callers
         may omit it to use defaults.
+    :param link_root: The engine-validated base for ``/`` targets; ``None`` falls back
+        to :func:`~docsentinel.link_root.link_root_for`, which accepts only values
+        meaning the scan root.
     :returns: Findings across every configured index, with the unlisted-required
         findings last.
-    :raises ConfigError: When a configured index is missing, unreadable, non-regular,
+    :raises ConfigError: When ``link_root`` is invalid for this scan root, or when a
+        configured index is missing, unreadable, non-regular,
         out-of-root, or not a discovered document.
     """
     settings = config if config is not None else Config()
     if not settings.navigation_indexes:
         return ()
     canonical = Path(os.path.realpath(root))
+    base = link_root if link_root is not None else link_root_for(canonical, settings)
 
     document_identities = frozenset(
         _resolved_identity(reference.path, canonical)
@@ -635,7 +648,7 @@ def detect(
         except (OSError, UnicodeDecodeError) as exc:
             # A non-UTF-8 or mid-read-failing index must fail closed with the documented readiness error.
             raise ConfigError(f"configured navigation index could not be read: {_echo(index_path)}") from exc
-        index_findings, index_identities = _analyze_index(text, index_path, canonical, settings, stat_cache)
+        index_findings, index_identities = _analyze_index(text, index_path, canonical, settings, stat_cache, base)
         findings.extend(index_findings)
         identities.update(index_identities)
 

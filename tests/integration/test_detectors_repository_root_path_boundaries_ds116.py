@@ -61,6 +61,12 @@ from docsentinel.engine import scan
 from docsentinel.reporting import render
 from docsentinel.rules import rules_for_profile
 from tests.asset_helpers import AssetCase
+from tests.git_marker_helpers import (
+    GitMarkerGuard,
+    install_git_marker_guard,
+    is_git_marker_probe,
+    is_project_marker_probe,
+)
 from tests.mock.test_path_boundaries_oracle import (
     _install_recorder,
     _is_under,
@@ -356,8 +362,10 @@ def test_symlink_escape_is_rejected_with_recorder(asset_case: Callable[[str, str
     scan(root, config=Config(profile="fast"))
 
     recorder = _Recorder()
+    guard = GitMarkerGuard(str(canonical))
     with pytest.MonkeyPatch.context() as patch:
         _install_recorder(patch, recorder)
+        install_git_marker_guard(patch, guard)
         result = scan(root, config=Config(profile="fast"))
 
     own = _ds116(result.findings)
@@ -371,8 +379,11 @@ def test_symlink_escape_is_rejected_with_recorder(asset_case: Callable[[str, str
     for recorded in recorder.paths:
         assert recorded != secret_str, f"touched the out-of-root secret file: {recorded}"
         assert not _is_under(recorded, outside_str), f"touched a path under the out-of-root tree: {recorded}"
+        if is_git_marker_probe(recorded, root_str) or is_project_marker_probe(recorded, root_str):
+            continue  # link_root: an lstat existence check of <ancestor>/.git or a project marker only
         allowed = _is_under(recorded, root_str) or _is_under(root_str, recorded)
         assert allowed, f"touched a path outside the scan root: {recorded}"
+    assert guard.violations == [], f"went past an existence check of a .git path: {guard.violations}"
 
 
 def test_finding_line_is_the_offending_reference_not_the_first(tmp_path: Path):
@@ -588,7 +599,7 @@ def test_reports_are_stable_across_formats(asset_case: Callable[[str, str], Asse
 
     text = render(result, "text")
     assert render(result, "text") == text
-    assert "error: README.md: reference escapes the documentation root: ../../secrets.md" in text
+    assert "error: README.md:3: reference escapes the documentation root: ../../secrets.md" in text
 
     payload = json.loads(render(result, "json-v1"))
     assert payload["schema_version"] == 1

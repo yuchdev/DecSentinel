@@ -97,6 +97,7 @@ from typing import Optional
 from docsentinel import models, rules
 from docsentinel.config import Config
 from docsentinel.detectors.path_boundaries import escapes_via_symlink, is_ds116_owned
+from docsentinel.link_root import link_root_for
 from docsentinel.markdown_blocks import MarkdownBlockIndex, ReferenceStatus, resolve_local_reference, scan_markdown
 
 #: Stable metadata for ``DS113``, registered as an always-active, default-on fast
@@ -302,7 +303,12 @@ def _collect_candidates(index: MarkdownBlockIndex, settings: Config) -> list[tup
 
 
 def check_text(
-    text: str, document_path: str, root: Path, config: Optional[Config] = None
+    text: str,
+    document_path: str,
+    root: Path,
+    config: Optional[Config] = None,
+    *,
+    link_root: Optional[Path] = None,
 ) -> tuple[models.Finding, ...]:
     """Return ``DS113`` findings for one document's Markdown ``text``.
 
@@ -323,12 +329,17 @@ def check_text(
     :param document_path: POSIX-style relative path recorded on each finding.
     :param root: The canonical scan root used for containment.
     :param config: Effective settings, or ``None`` for defaults.
+    :param link_root: Precomputed base and containment boundary for ``/`` targets;
+        ``None`` resolves it from ``config`` via
+        :func:`~docsentinel.link_root.link_root_for`.
     :returns: Findings in source order, one per offending reference.
+    :raises ConfigError: When ``link_root`` must be resolved here and is invalid.
     """
     settings = config if config is not None else Config()
     if settings.missing_asset_policy == "off":
         return ()
     severity = "warning" if settings.missing_asset_policy == "warn" else DS113.severity
+    base = link_root if link_root is not None else link_root_for(root, settings)
 
     index = scan_markdown(text, document_path)
     extensions = _asset_extensions(settings)
@@ -347,9 +358,9 @@ def check_text(
             continue
         # Containment gate (lexical, no filesystem access): DS116 owns every unsafe
         # category, so DS113 must neither resolve nor stat it (R2).
-        if is_ds116_owned(root, document_path, target):
+        if is_ds116_owned(root, document_path, target, link_root=base):
             continue
-        reference = resolve_local_reference(root, document_path, target)
+        reference = resolve_local_reference(root, document_path, target, link_root=base)
         if reference.status is not ReferenceStatus.RESOLVED or reference.path is None:
             # EXTERNAL (URL/data URI/protocol-relative), template, glob, or an
             # empty target: not a local asset DS113 owns.
@@ -358,7 +369,8 @@ def check_text(
             # A link-shaped reference without an asset extension is DS101's/prose's
             # territory, not DS113's (R5).
             continue
-        if escapes_via_symlink(root, reference.path):
+        boundary = reference.boundary if reference.boundary is not None else root
+        if escapes_via_symlink(boundary, reference.path):
             # An in-root symlink pointing outside the root is DS116's finding (R2);
             # never stat it.
             continue
@@ -390,6 +402,8 @@ def detect(
     root: Path,
     documents: tuple[models.Document, ...],
     config: Optional[Config] = None,
+    *,
+    link_root: Optional[Path] = None,
 ) -> tuple[models.Finding, ...]:
     """Return ``DS113`` findings for Markdown documents in their supplied order.
 
@@ -401,18 +415,23 @@ def detect(
     :param documents: Discovered documents to inspect, in scan order.
     :param config: Effective settings; the engine passes this, and direct callers
         may omit it to use defaults.
+    :param link_root: The engine-validated base for ``/`` targets; ``None`` falls back
+        to :func:`~docsentinel.link_root.link_root_for`, which accepts only values
+        meaning the scan root.
     :returns: Findings across all documents in document then source order.
+    :raises ConfigError: When ``link_root`` is invalid for this scan root.
     """
     settings = config if config is not None else Config()
     if settings.missing_asset_policy == "off":
         return ()
     canonical = Path(os.path.realpath(root))
+    base = link_root if link_root is not None else link_root_for(canonical, settings)
     findings: list[models.Finding] = []
     for document in documents:
         if not document.path.endswith(".md"):
             continue
         text = _read_text(canonical / document.path)
-        findings.extend(check_text(text, document.path, canonical, settings))
+        findings.extend(check_text(text, document.path, canonical, settings, link_root=base))
     return tuple(findings)
 
 

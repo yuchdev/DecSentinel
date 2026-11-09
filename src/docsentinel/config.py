@@ -90,6 +90,8 @@ _CONFIG_OPTIONS = {
     "telemetry_extensions",
     # Milestone 0007 Story 04.0 Task 02 — path -> domain table of ``builtin:domain``.
     "telemetry_domains",
+    # Site-root-absolute link base (``/``-targets; DS101, DS103, DS112, DS113, DS116).
+    "link_root",
 }
 # Standalone config file names accepted at the scan root: the preferred name first, then the alias.
 STANDALONE_CONFIG_NAMES = ("docsentinel.toml", "doc_sentinel.toml")
@@ -305,6 +307,17 @@ class Config:
         M20-M23). Validated by :func:`validate_telemetry_domains` here and again by
         :func:`docsentinel.telemetry.builtin.domain.domain_for` for an injected
         ``Config``. Ignored unless ``builtin:domain`` is loaded.
+    :ivar link_root: Base directory for site-root-absolute targets (a leading
+        ``/``). ``"auto"`` (the default) uses the nearest ancestor of the scan root,
+        the scan root included, that holds a ``.git`` entry (a directory or a file),
+        falling back to the scan root; any other value is a path relative to the
+        scan root that must name the scan root itself or an ancestor no higher than
+        the nearest ``.git`` ancestor (for example ``"."`` for an MkDocs-style site
+        or ``".."``). Validated lexically by :func:`validate_link_root` here; the
+        ancestor, repository-ceiling and directory checks need the scan root and run
+        in :func:`docsentinel.link_root.resolve_link_root`,
+        which also re-validates an injected ``Config``. Relative targets are never
+        affected.
     """
 
     include: tuple[str, ...] = ("*.md", "**/*.md")
@@ -371,6 +384,7 @@ class Config:
     report_include_run_meta: bool = False
     telemetry_extensions: tuple[str, ...] = ()
     telemetry_domains: tuple[tuple[str, str], ...] = ()
+    link_root: str = "auto"
 
 
 def domain_glob_segments(glob: object, where: str) -> tuple[str, ...]:
@@ -494,6 +508,35 @@ def validate_telemetry_extensions(value: object) -> tuple[str, ...]:
             raise ConfigError(f"telemetry_extensions[{position}] repeats an earlier entry")
         seen.add(item)
     return tuple(value)
+
+
+#: The ``link_root`` value selecting the ``.git`` ancestor walk.
+LINK_ROOT_AUTO = "auto"
+
+
+def validate_link_root(value: object) -> str:
+    """Return a lexically valid ``link_root`` value, else raise ``ConfigError``.
+
+    The check is lexical and performs no filesystem access. ``"auto"`` is accepted
+    as is; any other value must be a nonempty relative ``/``-separated path without
+    control, format or separator code points, backslashes, a leading ``/`` or a
+    Windows drive. Whether it names the scan root or an ancestor of it needs the
+    scan root, so :func:`docsentinel.link_root.resolve_link_root` decides that. The
+    value is repository-controlled, so it is never echoed.
+
+    :param value: The configured value (from TOML or an injected :class:`Config`).
+    :returns: The validated string.
+    :raises ConfigError: For a non-string, empty or lexically unsafe value.
+    """
+    if type(value) is not str or not value:
+        raise ConfigError('link_root must be "auto" or a nonempty path relative to the scan root')
+    if value == LINK_ROOT_AUTO:
+        return value
+    if neutralize(value) != value or any(ord(character) < 0x20 or ord(character) == 0x7F for character in value):
+        raise ConfigError("link_root holds a control, format or separator character")
+    if value.startswith("/") or "\\" in value or re.match(r"^[A-Za-z]:", value):
+        raise ConfigError("link_root must be a relative path with / separators (the scan root or an ancestor)")
+    return value
 
 
 def _require_bool(name: str, value: object) -> bool:
@@ -807,5 +850,6 @@ def _load_extra_options(options: dict[str, object], defaults: Config) -> dict[st
     extra["telemetry_domains"] = validate_telemetry_domains(
         options.get("telemetry_domains", list(defaults.telemetry_domains))
     )
+    extra["link_root"] = validate_link_root(options.get("link_root", defaults.link_root))
 
     return extra

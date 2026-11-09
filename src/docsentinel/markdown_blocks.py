@@ -372,12 +372,19 @@ class ResolvedReference:
         existing three-argument construction and every ``DS101``-``DS117``
         consumer that reads only :attr:`status`/:attr:`path`/:attr:`fragment`
         stays byte-compatible.
+    :ivar boundary: Additive, defaulted containment boundary for a ``RESOLVED``
+        :attr:`path`: the link root for a site-root-absolute (``/``) target, the
+        scan root for every other target, ``None`` for other statuses. Consumers
+        pass it to the symlink-out checks of ``path_boundaries`` instead of the
+        scan root. It is excluded from equality (``compare=False``), so existing
+        three-argument comparisons are unchanged.
     """
 
     status: ReferenceStatus
     path: Optional[Path]
     fragment: str
     reason: str = ""
+    boundary: Optional[Path] = field(default=None, compare=False)
 
 
 def slugify(heading_text: str) -> str:
@@ -1371,7 +1378,9 @@ def _normalize_relative(relative: str) -> Optional[tuple[str, ...]]:
     return tuple(parts)
 
 
-def resolve_local_reference(root: Path, document_path: str, raw_target: str) -> ResolvedReference:
+def resolve_local_reference(
+    root: Path, document_path: str, raw_target: str, *, link_root: Optional[Path] = None
+) -> ResolvedReference:
     """Resolve a Markdown reference target against a scan root.
 
     This resolver is lexical only: it never opens a target, follows a symlink,
@@ -1389,9 +1398,18 @@ def resolve_local_reference(root: Path, document_path: str, raw_target: str) -> 
     classify as the escapes a renderer would make live; ``%252e%252e`` stays
     literal (no double-decode).
 
+    A site-root-absolute target (a leading ``/``) is joined onto ``link_root``
+    rather than onto the scan root, and its ``..`` normalisation is bounded by
+    ``link_root``: ``/../x`` past the link root is ``OUTSIDE_ROOT``, while ``/src/x``
+    inside the link root is ``RESOLVED`` even when it lies outside the scan root.
+    Relative targets always resolve against the referring document inside ``root``.
+
     :param root: The resolved scan root directory.
     :param document_path: POSIX-style relative path of the referring document.
     :param raw_target: The link target exactly as written.
+    :param link_root: Base for ``/`` targets, the scan root or an ancestor of it
+        (see :func:`docsentinel.link_root.resolve_link_root`); ``None`` uses
+        ``root``, the historical behaviour, as configured-path callers must.
     :returns: A tagged :class:`ResolvedReference`.
     """
     # Decode HTML entities once, up front, exactly as a renderer does, so a numeric
@@ -1404,7 +1422,7 @@ def resolve_local_reference(root: Path, document_path: str, raw_target: str) -> 
 
     if path_part == "":
         if target.startswith("#"):
-            return ResolvedReference(ReferenceStatus.RESOLVED, root / document_path, fragment)
+            return ResolvedReference(ReferenceStatus.RESOLVED, root / document_path, fragment, boundary=root)
         return ResolvedReference(ReferenceStatus.UNSUPPORTED, None, fragment)
 
     # Decode percent-encoding once more, so encoded and literal forms classify
@@ -1431,12 +1449,15 @@ def resolve_local_reference(root: Path, document_path: str, raw_target: str) -> 
         return ResolvedReference(ReferenceStatus.UNSUPPORTED, None, fragment, reason="glob")
 
     if decoded.startswith("/"):
+        # Site-root-absolute: joined onto (and bounded by) the link root.
+        base = link_root if link_root is not None else root
         combined = decoded.lstrip("/")
     else:
+        base = root
         document_dir = str(Path(document_path).parent).replace("\\", "/")
         combined = decoded if document_dir in ("", ".") else f"{document_dir}/{decoded}"
 
     parts = _normalize_relative(combined)
     if parts is None:
         return ResolvedReference(ReferenceStatus.OUTSIDE_ROOT, None, fragment)
-    return ResolvedReference(ReferenceStatus.RESOLVED, root.joinpath(*parts), fragment)
+    return ResolvedReference(ReferenceStatus.RESOLVED, base.joinpath(*parts), fragment, boundary=base)

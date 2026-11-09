@@ -37,9 +37,15 @@ Security contract (see ``docs/security/threat-model-ds116-path-boundaries-2026-1
 
 Ruling G3 is honoured by the shared resolver: an absolute POSIX path such as
 ``/etc/passwd`` is reinterpreted root-relative (clean), consistent with the
-root-relative ``/docs/guide.md`` allowance. The current working directory never
-enters resolution; the trusted scan root is canonicalised exactly once in
-:func:`detect`.
+root-relative ``/docs/guide.md`` allowance. "Root" for a ``/`` target means the
+**link root** (``link_root``, see :mod:`docsentinel.link_root`): by default the
+nearest ancestor holding ``.git``, else the scan root. A ``/`` target that stays
+inside the link root is a legitimate repository reference and not an escape even
+when it lies outside the scan root (``/src/foo.py`` while scanning ``docs/``);
+``/../x`` past the link root is an escape, and the symlink-out walk for a ``/``
+target uses the link root as its boundary. Relative targets keep the scan root as
+their boundary. The current working directory never enters resolution; the
+trusted scan root is canonicalised exactly once in :func:`detect`.
 
 ``DS116`` is an always-active ``fast``-profile rule: it registers its
 :class:`~docsentinel.rules.Rule` and ``ANALYZERS`` entry as an import side effect
@@ -101,6 +107,7 @@ from urllib.parse import unquote
 
 from docsentinel import models, rules
 from docsentinel.config import Config
+from docsentinel.link_root import link_root_for
 from docsentinel.markdown_blocks import ReferenceStatus, resolve_local_reference, scan_markdown
 
 #: Stable metadata for ``DS116``, registered as an always-active ``fast``-profile
@@ -201,7 +208,11 @@ def _within(candidate: str, root: str) -> bool:
     :param root: The normalised absolute scan-root string.
     :returns: ``True`` when ``candidate`` is contained in ``root``.
     """
-    return candidate == root or candidate.startswith(root + os.sep)
+    if candidate == root:
+        return True
+    # Separator-aware: a root of ``/`` must stay ``/``, never become ``//``.
+    prefix = root if root.endswith(os.sep) else root + os.sep
+    return candidate.startswith(prefix)
 
 
 def contained_path(root: Path, candidate: Path, *, max_hops: int = _MAX_SYMLINK_HOPS) -> Optional[Path]:
@@ -338,7 +349,7 @@ def escapes_via_symlink(root: Path, candidate: Path, *, max_hops: int = _MAX_SYM
     return False
 
 
-def is_ds116_owned(root: Path, document_path: str, raw_target: str) -> bool:
+def is_ds116_owned(root: Path, document_path: str, raw_target: str, *, link_root: Optional[Path] = None) -> bool:
     """Return whether a target belongs to a DS116-owned *unsafe* category.
 
     This is the narrow security gate ``DS101`` consults for **link** targets so that
@@ -360,15 +371,19 @@ def is_ds116_owned(root: Path, document_path: str, raw_target: str) -> bool:
     :param root: The scan root directory.
     :param document_path: POSIX-style relative path of the referring document.
     :param raw_target: The reference target exactly as written.
+    :param link_root: Base and boundary for ``/`` targets; ``None`` uses ``root``
+        (configured-path callers must keep it ``None``).
     :returns: ``True`` when the target is an unsafe, DS116-owned category.
     """
-    reference = resolve_local_reference(root, document_path, raw_target)
+    reference = resolve_local_reference(root, document_path, raw_target, link_root=link_root)
     if reference.status is ReferenceStatus.OUTSIDE_ROOT:
         return True
     return reference.status is ReferenceStatus.UNSUPPORTED and reference.reason in _WINDOWS_REASONS | {"control"}
 
 
-def _classify(root: Path, document_path: str, raw_target: str, settings: Config) -> Optional[str]:
+def _classify(
+    root: Path, document_path: str, raw_target: str, settings: Config, link_root: Optional[Path] = None
+) -> Optional[str]:
     """Return the ``DS116`` violation category for one reference, or ``None``.
 
     The target is routed through the shared lexical resolver. When
@@ -380,6 +395,7 @@ def _classify(root: Path, document_path: str, raw_target: str, settings: Config)
     :param document_path: POSIX-style relative path of the referring document.
     :param raw_target: The reference target exactly as written.
     :param settings: Effective configuration.
+    :param link_root: Base and boundary for ``/`` targets; ``None`` uses ``root``.
     :returns: A key of :data:`_REASON_TEXT`, or ``None`` when the reference is safe.
     """
     target = raw_target.strip()
@@ -387,7 +403,7 @@ def _classify(root: Path, document_path: str, raw_target: str, settings: Config)
         return None
 
     probe = target if settings.decode_percent_paths else target.replace("%", "%25")
-    reference = resolve_local_reference(root, document_path, probe)
+    reference = resolve_local_reference(root, document_path, probe, link_root=link_root)
     status = reference.status
 
     if status is ReferenceStatus.EXTERNAL:
@@ -405,7 +421,8 @@ def _classify(root: Path, document_path: str, raw_target: str, settings: Config)
     # RESOLVED: lexically inside the root.
     if settings.decode_percent_paths and _RESIDUAL_ENCODING_RE.search(unquote(target.partition("#")[0])):
         return "residual"
-    if reference.path is not None and escapes_via_symlink(root, reference.path):
+    boundary = reference.boundary if reference.boundary is not None else root
+    if reference.path is not None and escapes_via_symlink(boundary, reference.path):
         return "symlink"
     return None
 
@@ -449,7 +466,12 @@ def _comment_filter(comment_starts: list[int], comment_ends: list[int], offset: 
 
 
 def check_text(
-    text: str, document_path: str, root: Path, config: Optional[Config] = None
+    text: str,
+    document_path: str,
+    root: Path,
+    config: Optional[Config] = None,
+    *,
+    link_root: Optional[Path] = None,
 ) -> tuple[models.Finding, ...]:
     """Return ``DS116`` findings for one document's Markdown ``text``.
 
@@ -470,12 +492,16 @@ def check_text(
     :param document_path: POSIX-style relative path recorded on each finding.
     :param root: The canonical scan root used for containment.
     :param config: Effective settings, or ``None`` for defaults.
+    :param link_root: Precomputed base for ``/`` targets; ``None`` resolves it from
+        ``config`` via :func:`~docsentinel.link_root.link_root_for`.
     :returns: Findings in source order, one per offending reference.
+    :raises ConfigError: When ``link_root`` must be resolved here and is invalid.
     """
     settings = config if config is not None else Config()
     if settings.root_escape_policy == "off":
         return ()
     severity = "warning" if settings.root_escape_policy == "warn" else DS116.severity
+    base = link_root if link_root is not None else link_root_for(root, settings)
 
     index = scan_markdown(text, document_path)
     comment_starts: list[int] = []
@@ -510,7 +536,7 @@ def check_text(
     for offset, line, raw_target, is_code_span in sorted(candidates):
         if not raw_target or _comment_filter(comment_starts, comment_ends, offset):
             continue
-        reason = _classify(root, document_path, raw_target, settings)
+        reason = _classify(root, document_path, raw_target, settings, base)
         if reason is None:
             continue
         if is_code_span and reason in _CODE_SPAN_EXEMPT_REASONS:
@@ -542,6 +568,8 @@ def detect(
     root: Path,
     documents: tuple[models.Document, ...],
     config: Optional[Config] = None,
+    *,
+    link_root: Optional[Path] = None,
 ) -> tuple[models.Finding, ...]:
     """Return ``DS116`` findings for Markdown documents in their supplied order.
 
@@ -553,18 +581,23 @@ def detect(
     :param documents: Discovered documents to inspect, in scan order.
     :param config: Effective settings; the engine passes this, and direct callers
         may omit it to use defaults.
+    :param link_root: The engine-validated base for ``/`` targets; ``None`` falls back
+        to :func:`~docsentinel.link_root.link_root_for`, which accepts only values
+        meaning the scan root.
     :returns: Findings across all documents in document then source order.
+    :raises ConfigError: When ``link_root`` is invalid for this scan root.
     """
     settings = config if config is not None else Config()
     if settings.root_escape_policy == "off":
         return ()
     canonical = Path(os.path.realpath(root))
+    base = link_root if link_root is not None else link_root_for(canonical, settings)
     findings: list[models.Finding] = []
     for document in documents:
         if not document.path.endswith(".md"):
             continue
         text = _read_text(canonical / document.path)
-        findings.extend(check_text(text, document.path, canonical, settings))
+        findings.extend(check_text(text, document.path, canonical, settings, link_root=base))
     return tuple(findings)
 
 
