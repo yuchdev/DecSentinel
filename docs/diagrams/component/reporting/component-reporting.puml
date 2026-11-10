@@ -31,6 +31,8 @@ package "telemetry/" {
     [text.json] as ttext
     [github.json] as tgh
     [json.json (schema 2)] as tjson
+    [json-v1.json (schema 1)] as tjson1
+    [json-documents.json] as tjdocs
   }
 }
 

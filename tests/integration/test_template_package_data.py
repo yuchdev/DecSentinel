@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 #: The template files Story 03.0 Task 01 ships.
-_TEMPLATES: frozenset[str] = frozenset({"text.json", "github.json", "json.json"})
+_TEMPLATES: frozenset[str] = frozenset({"text.json", "github.json", "json.json", "json-v1.json", "json-documents.json"})
 
 #: Repository root (the project ``uv build`` builds).
 _REPO_ROOT: Path = Path(__file__).resolve().parents[2]

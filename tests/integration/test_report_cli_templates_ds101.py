@@ -110,7 +110,7 @@ def test_default_json_is_schema_2_and_json_v1_is_schema_1(
         - Scope: in-process CLI calls
 
     On failure, first check:
-        - The ``schema_version`` members of ``templates/json.json``
+        - The ``schema_version`` members of ``templates/json.json`` and ``templates/json-v1.json``
     """
     root = _composed_root(asset_case)
 

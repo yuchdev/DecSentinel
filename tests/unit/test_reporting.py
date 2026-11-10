@@ -350,7 +350,7 @@ def test_render_text_and_json_formats() :
     )
     text_rendered = render(result, "text")
     assert "Profile: fast" in text_rendered
-    assert "error: README.md: Broken link" in text_rendered
+    assert "error: README.md:10: Broken link" in text_rendered
     assert "Pending: manual check" in text_rendered
 
     json_rendered = render(result, "json")

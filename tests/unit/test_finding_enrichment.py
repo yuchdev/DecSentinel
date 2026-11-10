@@ -176,7 +176,7 @@ def test_v1_json_render_excludes_new_fields():
         - Scope: rendering of in-memory results
 
     On failure, first check:
-        - The ``body`` of ``telemetry/templates/json.json``
+        - The ``body`` of ``telemetry/templates/json-v1.json``
     """
     base = {
         "profile": "fast",

@@ -12,6 +12,8 @@ All five are valid under the Task 01 loader of Story 02.0 and use no extension.
 | `text.json` | Header lines (schema version, profile, documents with-problems count, enabled rules, rules-evaluated line with the `append` loop of opt-in rules, advisory banner when set), then for each document with problems: `path (N bytes)` followed by indented `severity: path: message` lines; then `Pending:` lines. Spec §4 has the authoritative excerpt. |
 | `github.json` | One `::error|warning file=<path>,line=<n>,col=<c>,title=<rule>::<message>` per problem, grouped by document order; `col`/`line` omitted when null via `$if` on the property list; level from `severity` through a template `when`, not Python. `gha_property` on file/title, `gha_data` on message. |
 | `json.json` | Schema 2 envelope, spec §5: `schema_version`, `profile`, `run`, `summary`, `rules`, `documents[{path, bytes, domain?, problems[...]}]`, `pending`. `domain` uses `$default` so the template works without the domain extension. |
+| `json-v1.json` | Reproduces the schema-1 report: `asdict(ScanResult)` key order and nesting (`schema_version`, `profile`, `documents`, `findings`, `enabled_rules`, `pending`, `notice`) plus the `advisory` key only for a non-empty deep result. Uses `$var` over the exact legacy values; indent 2. |
+| `json-documents.json` | The bare list of per-document records from the original request. |
 
 Notes:
 
