@@ -35,3 +35,10 @@ ignore = [
     "E402",
     "E501"
 ]
+
+# extensions.py keeps six quoted `-> "None"` return annotations on purpose: docsig
+# (SIG501) needs a return annotation, flakeforge X008 rejects a bare `-> None`, and
+# the quoted form satisfies both (tests/flake8_lint/test_project_lint.py pins it).
+# UP037 would strip the quotes on every Stop-hook `ruff --fix`, so it is off here only.
+[lint.per-file-ignores]
+"src/docsentinel/telemetry/extensions.py" = ["UP037"]

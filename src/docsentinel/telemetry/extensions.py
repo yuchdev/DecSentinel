@@ -908,7 +908,7 @@ class ModuleWatch:
                 raise
             return None
 
-    def check_path(self):
+    def check_path(self) -> "None":
         """Refuse when a ``sys.path`` entry now lies inside the boundary (M6, prevention).
 
         The full check runs only when ``sys.path`` or the process cwd differs from
@@ -923,7 +923,7 @@ class ModuleWatch:
         _check_import_path(self._boundary, self._cwd)
         self._accepted_path = key
 
-    def check(self):
+    def check(self) -> "None":
         """Refuse when a module added or replaced since the snapshot lies inside, or ``sys.path`` does (M6).
 
         The ``sys.modules`` comparison runs first, so a module already imported from
@@ -1162,7 +1162,7 @@ class LoadedExtensions:
     filters: Mapping[str, BoundFilter] = field(default_factory=lambda: MappingProxyType({}))
     watch: Optional[ModuleWatch] = field(default=None, compare=False, repr=False)
 
-    def check_modules(self):
+    def check_modules(self) -> "None":
         """Refuse when a ``python:`` extension's run imported a module from the checkout (M6).
 
         Called after the factories, before and after the report hooks and after
@@ -1175,7 +1175,7 @@ class LoadedExtensions:
         if self.watch is not None:
             self.watch.check()
 
-    def check_import_path(self):
+    def check_import_path(self) -> "None":
         """Refuse when a ``sys.path`` entry now lies inside the boundary (M6, prevention).
 
         Called before every report and event hook, so an entry one hook (or
@@ -1438,7 +1438,7 @@ def resolve_extensions(
 # --------------------------------------------------------------------------- template binding (M12, M30)
 
 
-def check_template(template: Any, loaded: LoadedExtensions):
+def check_template(template: Any, loaded: LoadedExtensions) -> "None":
     """Check a validated template against the loaded registry; never loads anything (M30).
 
     :param template: A :class:`~docsentinel.telemetry.loader.Template`.
@@ -1837,7 +1837,7 @@ def apply_report_hooks(
     context: dict[str, JsonValue],
     loaded: LoadedExtensions,
     flat_problems: Mapping[int, dict[str, JsonValue]] = MappingProxyType({}),
-):
+) -> "None":
     """Run every hook and attach the results under ``ext.<name>`` (M13-M17, M26).
 
     The context is frozen once before the first hook, so hooks see core data only
