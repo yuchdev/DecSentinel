@@ -1,4 +1,4 @@
-"""Parity of ``telemetry.classify.FAULT_CLASSES`` with ``src/docsentinel/fault_classes.md`` and the rule registry.
+"""Parity of ``telemetry.classify.FAULT_CLASSES`` with ``docs/specs/fault-classes.md`` and the rule registry.
 
 The Markdown table is the hand-maintained source documented for reviewers; the dict is what the
 report model and the Milestone 0006 adapter consume. Both must list the same rows, and every
@@ -17,7 +17,7 @@ from docsentinel.telemetry.classify import FAULT_CLASSES, RULE_TITLES
 for _module in ("docsentinel.engine", "docsentinel.detectors.contradictions"):
     importlib.import_module(_module)
 
-_TABLE: Path = Path(__file__).resolve().parents[2] / "src" / "docsentinel" / "fault_classes.md"
+_TABLE: Path = Path(__file__).resolve().parents[2] / "docs" / "specs" / "fault-classes.md"
 _ROW_RE = re.compile(r"^\|\s*(DS\d{3})\s*\|\s*(\w+)\s*\|\s*`([a-z_]+)`\s*\|", re.MULTILINE)
 
 
@@ -32,7 +32,7 @@ def _table_rows() -> dict[str, tuple[str, str]]:
 
 def test_fault_class_dict_matches_markdown_table():
     """
-    [Integration] fault class table: verifies the classify table equals the fault_classes.md rows.
+    [Integration] fault class table: verifies the classify table equals the fault-classes.md rows.
 
     Scenario:
         Given the rule-to-fault-class Markdown table shipped beside ``rules.py``
@@ -67,7 +67,7 @@ def test_every_registered_rule_has_one_row_with_its_profile():
         - Scope: rule registry plus one source document
 
     On failure, first check:
-        - A newly registered rule missing from ``fault_classes.md``
+        - A newly registered rule missing from ``fault-classes.md``
     """
     loader.ensure_standard_loaded()
     rows = _table_rows()

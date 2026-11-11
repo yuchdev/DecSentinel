@@ -5,7 +5,7 @@ telemetry labels -- the report model (:mod:`docsentinel.telemetry.model`) and th
 Milestone 0006 fault-event adapter -- so a report and the event stream can never
 disagree about a finding. The vocabularies follow
 ``docs/specs/fault-event-contract.md`` §2; the rule-to-class table mirrors
-``src/docsentinel/fault_classes.md`` row for row (a unit test enforces the parity).
+``docs/specs/fault-classes.md`` row for row (a unit test enforces the parity).
 """
 
 from dataclasses import dataclass
@@ -16,7 +16,7 @@ from docsentinel.models import Finding
 from docsentinel.rules import RULES
 from docsentinel.telemetry.builtin.domain import DEFAULT_DOMAIN, domain_for
 
-#: Rule code -> fault class, mirroring every row of ``fault_classes.md``.
+#: Rule code -> fault class, mirroring every row of ``fault-classes.md``.
 FAULT_CLASSES: Final[dict[str, str]] = {
     "DS101": "dangling_reference",
     "DS102": "residual_markup",
@@ -71,7 +71,7 @@ RULE_TITLES: Final[dict[str, str]] = {
     "DS301": "Fact-contradiction candidate",
 }
 
-#: Fallback class for a rule with no ``fault_classes.md`` row (a review failure).
+#: Fallback class for a rule with no ``fault-classes.md`` row (a review failure).
 UNMAPPED_FAULT_CLASS: Final[str] = "unmapped"
 
 

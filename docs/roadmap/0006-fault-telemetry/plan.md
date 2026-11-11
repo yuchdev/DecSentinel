@@ -112,7 +112,7 @@ the same spec).
       findings (no second analyzer run), is skipped when disabled, and never alters
       exit code or `ScanResult`.
 - [ ] Every registered rule code (DS101–DS118, DS201–DS204, DS301) maps to a fault
-      class via [`src/docsentinel/fault_classes.md`](/src/docsentinel/fault_classes.md);
+      class via [`docs/specs/fault-classes.md`](/docs/specs/fault-classes.md);
       an unmapped rule yields `"unmapped"` and fails the close gate.
 - [ ] `details` never carries document text or matched snippets; a test asserts the
       bound (including through the persisting `sqlite`/`logging` sinks).
@@ -123,5 +123,5 @@ the same spec).
 
 - [ADR 0002 — Fault-Telemetry Event Emission](/docs/adr/0002-fault-telemetry-event-emission.md)
 - [Fault-event contract spec](/docs/specs/fault-event-contract.md)
-- [Fault-class mapping table](/src/docsentinel/fault_classes.md)
+- [Fault-class mapping table](/docs/specs/fault-classes.md)
 - Existing patterns: [docs/roadmap/0005-deepening-test-case-stage-2/plan.md](/docs/roadmap/0005-deepening-test-case-stage-2/plan.md), [CLAUDE.md](/CLAUDE.md), [docs/architecture/README.md](/docs/architecture/README.md).

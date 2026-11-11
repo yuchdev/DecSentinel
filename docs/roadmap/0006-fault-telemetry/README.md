@@ -31,7 +31,7 @@ verdict), with flexibly pluggable sinks, emitted from one call site in
 
 The decision and its trade-offs are recorded in
 [ADR 0002](/docs/adr/0002-fault-telemetry-event-emission.md); the rule-code ->
-fault-class table is [`src/docsentinel/fault_classes.md`](/src/docsentinel/fault_classes.md).
+fault-class table is [`docs/specs/fault-classes.md`](/docs/specs/fault-classes.md).
 
 ## Delivery order
 

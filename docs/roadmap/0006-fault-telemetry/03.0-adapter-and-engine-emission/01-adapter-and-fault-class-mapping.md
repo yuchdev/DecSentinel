@@ -11,7 +11,7 @@ only code importing both the event machinery and DocSentinel types (`ScanResult`
 cross-tool coupling is the written spec only.
 
 - A module-level `FAULT_CLASSES: dict[str, str]` transcribing the rows of
-  [`src/docsentinel/fault_classes.md`](/src/docsentinel/fault_classes.md). The
+  [`docs/specs/fault-classes.md`](/docs/specs/fault-classes.md). The
   markdown table is the human source of truth; this dict is its machine mirror and
   the two must agree (Story 04.0 enforces it). A rule code absent from the dict maps
   to `"unmapped"`.

@@ -17,7 +17,7 @@ is `Accepted` (ratified 2026-10-27); implementation in progress.
 - Only mark a story complete when its source code, tests, documentation updates,
   and CI are merged — not from an already-written specification.
 - Do not close 0006 while any registered rule code lacks a fault-class row in
-  [`src/docsentinel/fault_classes.md`](/src/docsentinel/fault_classes.md).
+  [`docs/specs/fault-classes.md`](/docs/specs/fault-classes.md).
 - Keep the event `schema_version`, the spec
   [docs/specs/fault-event-contract.md](/docs/specs/fault-event-contract.md), and
   FlakeForge's independent implementation in lockstep; record any bump here. The

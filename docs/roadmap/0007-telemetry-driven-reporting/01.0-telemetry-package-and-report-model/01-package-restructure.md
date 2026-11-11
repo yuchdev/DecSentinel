@@ -19,7 +19,7 @@
 4. Declare `telemetry/templates/*.json` as package data in `pyproject.toml`
    (hatchling `include`), and verify with `uv build` that the wheel contains them.
 5. Update every path reference to `telemetry.py` in Milestone 0006 docs, ADR 0002,
-   `docs/README.md`, `fault_classes.md` headers and `CLAUDE.md` to `telemetry/`
+   `docs/README.md`, `fault-classes.md` headers and `CLAUDE.md` to `telemetry/`
    (use the `/doc-xref` skill, then `/link-check`).
 
 ## Constraints

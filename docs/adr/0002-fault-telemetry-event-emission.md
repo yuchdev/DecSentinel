@@ -223,7 +223,7 @@ re-run analyzers or duplicate finding iteration. Mapping rules:
 - `tier` from the rule's profile: `fast`/`standard` -> `"deterministic"`,
   `deep` -> `"heuristic"`.
 - `fault_class` from the rule-code -> fault-class table
-  ([`src/docsentinel/fault_classes.md`](/src/docsentinel/fault_classes.md)).
+  ([`docs/specs/fault-classes.md`](/docs/specs/fault-classes.md)).
 - `outcome` per finding: `error` -> `"rejected"`; `warning` -> `"advisory"`
   (`"rejected"` under `--strict`, matching the exit-code contract); deep/heuristic
   -> `"advisory"`; baseline-removed -> `"suppressed"`. An evaluated rule with no
@@ -353,6 +353,6 @@ anything in.
 
 - **Cross-tool contract spec:** [docs/specs/fault-event-contract.md](/docs/specs/fault-event-contract.md)
 - **Roadmap milestone:** [docs/roadmap/0006-fault-telemetry/plan.md](/docs/roadmap/0006-fault-telemetry/plan.md)
-- **Fault-class mapping:** [src/docsentinel/fault_classes.md](/src/docsentinel/fault_classes.md)
+- **Fault-class mapping:** [docs/specs/fault-classes.md](/docs/specs/fault-classes.md)
 - **Custom-loader precedent:** FlakeForge `rule_modules` convention (sibling repo `docs/custom-rules.md`).
 - **Supporting specs:** [docs/architecture/README.md](/docs/architecture/README.md), [CLAUDE.md](/CLAUDE.md)

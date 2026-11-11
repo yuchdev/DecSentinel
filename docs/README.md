@@ -13,7 +13,7 @@
 | [`docs/specs/fault-event-contract.md`](specs/fault-event-contract.md) | Canonical cross-tool fault-event contract shared with FlakeForge: event fields/types, `tier`/`outcome` vocabularies, `schema_version` and its bump policy, the `FaultEventSink` Protocol, and runnable `JsonlSink`/`LoggingSink`/`SqliteSink`/custom-sink examples. Shared as a document only — no shared code. |
 | [`docs/adr/0003-template-driven-reporting-on-telemetry.md`](adr/0003-template-driven-reporting-on-telemetry.md) | ADR 0003 (Proposed, owner sign-off pending): template-driven reporting on a `telemetry/` package, decisions D1-D6. |
 | [`docs/specs/report-template-format.md`](specs/report-template-format.md) | Contract for report templates and extensions: pipeline, context variables, filters, `builtin:domain`, trust gate and errors. |
-| [`src/docsentinel/fault_classes.md`](../src/docsentinel/fault_classes.md) | Hand-maintained rule-code → fault-class mapping table consumed by the telemetry adapter in `telemetry/`; co-maintained with `rules.py`. |
+| [`docs/specs/fault-classes.md`](/docs/specs/fault-classes.md) | Hand-maintained rule-code → fault-class mapping table consumed by the telemetry adapter in `telemetry/`; co-maintained with `rules.py`. |
 | `docs/adr/assets/0001-config-source-precedence.mmd` | Mermaid diagram referenced by the example ADR 0001. |
 | `docs/agent/agents.md` | Reference table of the kit's Claude Code agents, their models and roles. |
 | `docs/agent/skills.md` | Reference table of the kit's skills and how to invoke them. |

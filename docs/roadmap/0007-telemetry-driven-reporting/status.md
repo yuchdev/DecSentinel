@@ -42,7 +42,7 @@
 **Delivered**
 - `telemetry.py` -> `telemetry/` package (`events.py`, `classify.py`, `model.py`); public import path unchanged; 12 golden report snapshots committed before the move.
 - `Finding.column/value/type`; DS101-DS103 populate them; `ScanResult.rules_evaluated/opt_in_off`, notice derived from them (byte-identical).
-- `ReportModel.build` + `CONTEXT_SCHEMA`; `classify()` pinned to `fault_classes.md`; schema-1 JSON still byte-identical via `_schema_v1_dict`.
+- `ReportModel.build` + `CONTEXT_SCHEMA`; `classify()` pinned to `fault-classes.md`; schema-1 JSON still byte-identical via `_schema_v1_dict`.
 
 **Tests / gate:** 2643 -> 2679 passed (9 skipped); goldens unchanged across the restructure; self-scan 0; `uv build` ok; docs link check 0 problems.
 

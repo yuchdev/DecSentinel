@@ -27,7 +27,7 @@ lacks a fault-class row.
 - CLI, library API, and pytest-plugin paths all emit identical events (one engine
   call site proven by test).
 - A mapping-coverage test fails if any registered rule code is missing from both
-  `fault_classes.md` and the adapter dict, or if the two disagree.
+  `fault-classes.md` and the adapter dict, or if the two disagree.
 - A conformance tripwire test fails if the event shape, `tier`/`outcome`
   vocabularies, or `schema_version` drift from the spec's literals.
 - Per-sink tests cover `JsonlSink` (stdout + append file), `LoggingSink` (captured

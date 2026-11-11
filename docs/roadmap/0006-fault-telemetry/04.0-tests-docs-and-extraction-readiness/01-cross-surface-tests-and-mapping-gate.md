@@ -11,7 +11,7 @@
   — proving the one `engine.scan()` call site serves every consumer.
 - **Mapping-coverage gate (unit):** iterate `RULES` and assert every registered
   code appears in the adapter's `FAULT_CLASSES` dict; separately assert the dict and
-  [`fault_classes.md`](/src/docsentinel/fault_classes.md) agree (parse the table). A
+  [`fault-classes.md`](/docs/specs/fault-classes.md) agree (parse the table). A
   new rule shipped without a row fails this test, not production.
 - **Conformance tripwire (unit):** assert DocSentinel's `FaultEvent` field set, the
   `tier`/`outcome` vocabularies, and `SCHEMA_VERSION` equal literals transcribed

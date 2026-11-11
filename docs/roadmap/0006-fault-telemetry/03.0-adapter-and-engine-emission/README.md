@@ -24,7 +24,7 @@ story that turns behaviour on (and only when `telemetry_enabled`).
   set for `"suppressed"`) without re-running analyzers or duplicating finding
   iteration.
 - Every registered rule maps to a fault class via
-  [`src/docsentinel/fault_classes.md`](/src/docsentinel/fault_classes.md); an
+  [`docs/specs/fault-classes.md`](/docs/specs/fault-classes.md); an
   unmapped rule yields `"unmapped"`.
 - Emission is one call site, builds the sink via `build_sink`, `close()`s it when
   the sink offers `close`, is skipped when disabled, and never alters the exit code
