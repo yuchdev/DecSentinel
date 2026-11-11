@@ -128,6 +128,51 @@
       "as": "reason",
       "placement": "block",
       "body": [{ "type": "line", "text": "Pending: {reason|neutralize}", "variables_used": ["reason"] }]
+    },
+    {
+      "type": "line",
+      "when": { "var": "blocking_count", "gt": 0 },
+      "text": "Blocking findings: {blocking_count}",
+      "variables_used": ["blocking_count"]
+    },
+    {
+      "type": "loop",
+      "when": { "var": "blocking_count", "gt": 0 },
+      "over": "findings",
+      "as": "p",
+      "placement": "block",
+      "body": [
+        {
+          "type": "group",
+          "when": { "var": "p.outcome", "eq": "rejected" },
+          "body": [
+            {
+              "type": "line",
+              "when": { "var": "p.line", "eq": null },
+              "text": "  {p.severity}: {p.document_path|neutralize}: {p.message|neutralize}",
+              "variables_used": ["p.severity", "p.document_path", "p.message"]
+            },
+            {
+              "type": "group",
+              "when": { "var": "p.line", "ne": null },
+              "body": [
+                {
+                  "type": "line",
+                  "when": { "var": "p.column", "eq": null },
+                  "text": "  {p.severity}: {p.document_path|neutralize}:{p.line}: {p.message|neutralize}",
+                  "variables_used": ["p.severity", "p.document_path", "p.line", "p.message"]
+                },
+                {
+                  "type": "line",
+                  "when": { "var": "p.column", "ne": null },
+                  "text": "  {p.severity}: {p.document_path|neutralize}:{p.line}:{p.column}: {p.message|neutralize}",
+                  "variables_used": ["p.severity", "p.document_path", "p.line", "p.column", "p.message"]
+                }
+              ]
+            }
+          ]
+        }
+      ]
     }
   ]
 }

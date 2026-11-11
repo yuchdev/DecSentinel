@@ -8,6 +8,9 @@ jobs:
     permissions:
       contents: read
     runs-on: ubuntu-latest
+    env:
+      REPORT_PRINT_MAX_FINDINGS: "15"
+      REPORT_TAIL_LINES: "60"
     strategy:
       matrix:
         python-version: ["3.12", "3.13"]
@@ -18,7 +21,33 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: uv sync --locked --extra test --extra standard
       - run: uv run --locked pytest -p docsentinel.pytest_plugin
-      - run: uv run --locked docsentinel scan . --format json
-      - run: uv run --locked docsentinel scan .
-      - run: uv run --locked docsentinel scan . --profile standard --baseline .docsentinel-standard-baseline.json
+      # Scan reports go to files (uploaded as an artifact). print_report.py logs a report
+      # only up to REPORT_PRINT_MAX_FINDINGS findings; a larger one is logged as its
+      # finding count, line count and path, plus the text "Blocking findings" recap.
+      - name: Self-scan (json)
+        run: |
+          status=0
+          uv run --locked docsentinel scan . --format json -o reports/scan.json || status=$?
+          python .github/scripts/print_report.py reports/scan.json
+          exit $status
+      - name: Self-scan (text)
+        run: |
+          status=0
+          uv run --locked docsentinel scan . -o reports/scan.txt || status=$?
+          python .github/scripts/print_report.py reports/scan.txt
+          exit $status
+      - name: Self-scan (standard profile)
+        run: |
+          status=0
+          uv run --locked docsentinel scan . --profile standard --baseline .docsentinel-standard-baseline.json -o reports/scan-standard.txt || status=$?
+          python .github/scripts/print_report.py reports/scan-standard.txt
+          exit $status
+      - name: Upload scan reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: docsentinel-reports-py${{ matrix.python-version }}
+          path: reports/
+          if-no-files-found: ignore
+          retention-days: 14
       - run: uv build

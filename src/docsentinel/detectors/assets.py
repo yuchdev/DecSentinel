@@ -329,9 +329,8 @@ def check_text(
     :param document_path: POSIX-style relative path recorded on each finding.
     :param root: The canonical scan root used for containment.
     :param config: Effective settings, or ``None`` for defaults.
-    :param link_root: Precomputed base and containment boundary for ``/`` targets;
-        ``None`` resolves it from ``config`` via
-        :func:`~docsentinel.link_root.link_root_for`.
+    :param link_root: Precomputed base and containment boundary for ``/`` targets,
+        or ``None`` to resolve it from ``config`` with ``link_root_for``.
     :returns: Findings in source order, one per offending reference.
     :raises ConfigError: When ``link_root`` must be resolved here and is invalid.
     """
