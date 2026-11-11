@@ -211,7 +211,13 @@ def test_text_findings_sit_under_their_document(case_name: str, asset_case: Call
     lines = _render(result, "text").split("\n")
     flagged = {finding.path for finding in result.findings}
     clean = {document.path for document in result.documents} - flagged
-    body = [line for line in lines if not line.startswith(("Schema version:", "Profile:", "Documents:", "Enabled"))]
+    # The trailing "Blocking findings" recap repeats blocking lines outside any document group.
+    recap_at = next((i for i, line in enumerate(lines) if line.startswith("Blocking findings:")), len(lines))
+    body = [
+        line
+        for line in lines[:recap_at]
+        if not line.startswith(("Schema version:", "Profile:", "Documents:", "Enabled"))
+    ]
 
     current = None
     seen_findings = 0

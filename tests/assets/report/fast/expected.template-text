@@ -8,3 +8,5 @@ README.md (120 bytes)
 docs/guide.md (342 bytes)
   warning: docs/guide.md:7: Stray HTML comment
   warning: docs/guide.md: Unresolvable path: scripts/run.sh
+Blocking findings: 1
+  error: README.md:3: Dangling link target: ./missing.md

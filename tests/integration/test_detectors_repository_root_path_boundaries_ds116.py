@@ -952,7 +952,8 @@ def test_hostile_targets_are_bounded_and_repr_escaped(tmp_path: Path):
     text = render(result, "text")
     assert "\x1b" not in text and "\x00" not in text
     assert "\\x1b" in text and "\\x00" in text
-    error_lines = [line for line in text.splitlines() if line.startswith("  error: README.md:")]
+    body = text.split("\nBlocking findings:", 1)[0]  # the trailing recap repeats every error line
+    error_lines = [line for line in body.splitlines() if line.startswith("  error: README.md:")]
     assert len(error_lines) == len(hostile_targets)  # no message broke onto a second line
 
     github = render(result, "github")

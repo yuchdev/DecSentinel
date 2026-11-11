@@ -82,8 +82,9 @@ def test_rendering_scales_linearly_through_the_358_document_scale(name: str):
     """
 
     def run(result: ScanResult) -> list[str]:
-        """Render ``result`` and return the lines carrying a problem message."""
-        return [line for line in render(result, name).split("\n") if _MARKER in line]
+        """Render ``result`` and return the lines carrying a problem message (text recap excluded)."""
+        body = render(result, name).split("\nBlocking findings:", 1)[0]
+        return [line for line in body.split("\n") if _MARKER in line]
 
     assert_scales_linearly(
         _result,

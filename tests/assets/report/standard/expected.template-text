@@ -11,3 +11,5 @@ docs/b.md (2048 bytes)
 src/calc.py
   error: src/calc.py:12: Docstring parameter 'y' does not exist in add(x)
 Pending: DS204: no docsig_paths configured
+Blocking findings: 1
+  error: src/calc.py:12: Docstring parameter 'y' does not exist in add(x)

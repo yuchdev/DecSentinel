@@ -139,10 +139,22 @@ Operators: `eq`, `ne`, `in`, `gt`, `lt`, `truthy`, `falsy`.
             "text": "  {p.severity}: {doc.path|neutralize}:{p.line}:{p.column}: {p.message|neutralize}",
             "variables_used": ["p.severity", "doc.path", "p.line", "p.column", "p.message"] } ] } ] } ] },
     { "type": "loop", "over": "pending", "as": "reason", "placement": "block", "body": [
-      { "type": "line", "text": "Pending: {reason|neutralize}", "variables_used": ["reason"] } ] }
+      { "type": "line", "text": "Pending: {reason|neutralize}", "variables_used": ["reason"] } ] },
+    { "type": "line", "when": { "var": "blocking_count", "gt": 0 },
+      "text": "Blocking findings: {blocking_count}", "variables_used": ["blocking_count"] },
+    { "type": "loop", "when": { "var": "blocking_count", "gt": 0 }, "over": "findings", "as": "p",
+      "placement": "block", "body": [
+        { "type": "group", "when": { "var": "p.outcome", "eq": "rejected" }, "body": [
+          "... the same three line/column variants, with {p.document_path|neutralize} ..." ] } ] }
   ]
 }
 ```
+
+The report ends with a **Blocking findings** recap: every finding whose `outcome` is
+`rejected` (errors, and warnings under `--strict`), repeated in `findings` order after
+the per-document groups. It is the reason for exit code `1`, and it is the last thing
+printed, so it stays visible at the end of a long CI log. It is absent when nothing
+blocks, including for every deep-profile run (deep findings are `advisory`).
 
 The `Documents:` header counts inventory documents only (`documents_count`,
 `documents_with_problems_count`; see Section 6), matching the legacy `Documents: N`
@@ -226,6 +238,7 @@ The loader validates every reference against this schema. Each variable carries 
 | `enabled_rules` | list[str] | trusted |
 | `documents_count`, `documents_with_problems_count` | int: inventory documents only (`len(inventory)` and the inventory documents with at least one problem); a path outside the inventory that `documents` appends is never counted, so the counts are the fault-rate denominator and match the legacy `Documents: N` | trusted |
 | `findings_count` | int (every finding, including those on out-of-inventory paths) | trusted |
+| `blocking_count` | int (findings whose `outcome` is `rejected`: errors, and warnings under `--strict`) | trusted |
 | `rules_evaluated` | int | trusted |
 | `rules_type` | str (the profile name) | trusted |
 | `opt_in_off` | list[{`code`, `option`}] | trusted |

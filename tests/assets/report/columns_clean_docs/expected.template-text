@@ -10,3 +10,7 @@ README.md (200 bytes)
 docs/z.md (300 bytes)
   error: docs/z.md:4:12: dangling link -> ./gone.md
   warning: docs/z.md:9:1: Stray HTML comment
+Blocking findings: 3
+  error: docs/z.md:4:12: dangling link -> ./gone.md
+  error: README.md:5:10: dangling link -> /docs/adr/README.md
+  error: README.md:5:45: dangling link -> /docs/adr/README.md
