@@ -45,24 +45,8 @@ Runs structural and reference rules. All rules use only the Python standard
 library. Sixteen rules are registered; twelve are evaluated by default (four are
 opt-in policies that are silent until their option is set):
 
-| Rule    | Severity | Description                                      | Opt-in option                |
-|---------|----------|--------------------------------------------------|------------------------------|
-| `DS101` | error    | Dangling link or anchor (missing target file)    | —                            |
-| `DS102` | warning  | Stray HTML comment                               | —                            |
-| `DS103` | warning  | Unresolvable path-like inline code span          | —                            |
-| `DS104` | warning  | Conflicting heading and explicit anchors         | —                            |
-| `DS105` | warning  | Heading-level skip or wrong first heading        | —                            |
-| `DS106` | warning  | Empty or contentless leaf section                | —                            |
-| `DS108` | warning  | Reference-style link definition integrity        | —                            |
-| `DS109` | error    | Malformed or unclosed fenced code block          | —                            |
-| `DS110` | warning  | Missing language label on a code fence           | `require_fence_languages`    |
-| `DS112` | warning  | Declared documentation navigation integrity      | `navigation_indexes`         |
-| `DS113` | error    | Missing local media or document asset            | —                            |
-| `DS114` | error    | Duplicate stable document identifier             | —                            |
-| `DS115` | warning  | Deprecated name or migrated reference            | `deprecated_references_file` |
-| `DS116` | error    | Reference escaping the documentation root        | —                            |
-| `DS117` | warning  | Malformed GFM pipe-table structure               | —                            |
-| `DS118` | warning  | Documentation file or directory naming violation | `documentation_naming`       |
+Every rule, with its severity, activation and options, is listed in the
+[rules table](../reference/rules.md).
 
 ```bash
 docsentinel scan --profile fast

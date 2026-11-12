@@ -193,6 +193,7 @@ DocSentinel provides pre-commit hooks in `.pre-commit-hooks.yaml`:
 
 - [User Tutorial](docs/user/tutorial/README.md) — Comprehensive guide for CLI and Python library consumers.
 - [Statistical Checks Reference](docs/user/reference/statistical-checks.md) — Full reference for the six standard-profile threshold keys (DS201–DS203).
+- [Rules](docs/user/reference/rules.md) — The single table of all 21 checks: profile, severity, activation, fault class and config keys (drift-tested against the code).
 - [Configuration Reference](docs/user/reference/configuration.md) — All fast-profile policy options for DS104–DS118, with defaults and valid values.
 - [Architecture](docs/architecture/README.md) — Architectural design, profile boundaries, and data contracts.
 - [Markdown Scanner Guide](docs/dev/markdown_scanner.md) — Developer guide for adding rules, resolver ownership, and the security checklist.

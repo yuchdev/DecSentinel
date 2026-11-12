@@ -219,24 +219,8 @@ The registered [Story 02.0](../roadmap/0001-generic-implementation/02.0-fast-pro
 used. Rules `DS104` to `DS118` build on the shared `markdown_blocks.py` scanner, except `DS114` and
 `DS118` (noted below).
 
-| Rule    | Reports                                              | Severity | Activation                           |
-|---------|------------------------------------------------------|----------|--------------------------------------|
-| `DS101` | Dangling Markdown links and anchors                  | error    | always                               |
-| `DS102` | Stray HTML comments                                  | warning  | always                               |
-| `DS103` | Unresolvable path-like inline code spans             | warning  | always                               |
-| `DS104` | Conflicting heading and explicit anchors             | warning  | always                               |
-| `DS105` | Heading-level skips and a wrong first heading        | warning  | always                               |
-| `DS106` | Empty or contentless leaf sections                   | warning  | always                               |
-| `DS108` | Reference-style link definition integrity            | warning  | always                               |
-| `DS109` | Unclosed or malformed fenced code blocks             | error    | always                               |
-| `DS110` | Fenced code blocks missing a required language label | warning  | opt-in: `require_fence_languages`    |
-| `DS112` | Declared documentation navigation integrity          | warning  | opt-in: `navigation_indexes`         |
-| `DS113` | Missing local media and document assets              | error    | always                               |
-| `DS114` | Duplicate stable document identifiers                | error    | always                               |
-| `DS115` | Deprecated names and migrated references             | warning  | opt-in: `deprecated_references_file` |
-| `DS116` | References that escape the scan root                 | error    | always                               |
-| `DS117` | Malformed GFM pipe-table structure                   | warning  | always                               |
-| `DS118` | Documentation file and directory naming violations   | warning  | opt-in: `documentation_naming`       |
+The [rules table](../user/reference/rules.md) lists every rule with its severity, activation, fault
+class and config keys; it is drift-tested against the registry.
 
 ### `DS104` - anchor conflicts
 
