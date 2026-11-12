@@ -24,13 +24,14 @@ Project architecture, commands, conventions and test layout live in [`CLAUDE.md`
 | `feature-reviewer`, `security-auditor`, `background-reviewer` | Review, threat modelling, asynchronous deep review. |
 | `task-verifier` | Spec-compliance check against `docs/roadmap/**`. |
 | `docs-writer`, `docs-updater`, `docs-reviewer` | New docs, doc sync, DS301 triage. |
+| `diagram-creator` | Create, fix and render `/docs/diagrams/` (Mermaid by default, PlantUML for images); uses the `mermaid` and `plantuml` skills. |
 
 Run `docs-updater` once per docs-impacting change set, after the tests are green and before the push. The triggers and the document map are in [documentation_sync.md](/docs/dev/documentation_sync.md); `python-expert` ends every report with a `Docs impact` line.
 | `incident-analyst` | Lifecycle and escalation-safety review. |
 
 ## Skills
 
-`adr-write`, `dep-audit`, `doc-xref`, `document-tests`, `link-check`, `pr-review`, `secret-scan`, `test-gap`, `verify-task`, `implement-story`, `implement-milestone`, `update-docs`, `deep-review`.
+`adr-write`, `dep-audit`, `doc-xref`, `document-tests`, `link-check`, `pr-review`, `secret-scan`, `test-gap`, `verify-task`, `implement-story`, `implement-milestone`, `update-docs`, `deep-review`, plus the vendored diagram skills `mermaid` and `plantuml` (excluded from ruff and the self-scan).
 
 The loop skills run one iteration per invocation and keep a cursor in `.copilot/state/`; re-run the same command to continue (or use `/autopilot`).
 

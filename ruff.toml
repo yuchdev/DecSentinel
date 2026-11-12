@@ -9,7 +9,8 @@ extend-exclude = [
     # Canon data submodules are separate repositories with their own lint setup.
     "canons",
     # Vendored third-party skill (SpillwaveSolutions/plantuml); linting it would rewrite upstream code.
-    ".claude/skills/plantuml"
+    ".claude/skills/plantuml",
+    ".github/skills/plantuml"
 ]
 
 [lint]

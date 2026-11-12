@@ -53,6 +53,16 @@ EXCLUDED_DIRS = {
     "build",
 }
 
+# Vendored third-party skills (mirrored in .claude/skills and .github/skills): upstream Markdown we
+# do not edit, so its links are not ours to fix. Matched as a ``skills/<name>`` path pair.
+VENDORED_SKILLS = {"mermaid", "plantuml"}
+
+
+def _is_vendored(md: Path) -> bool:
+    """Return whether ``md`` lies inside a vendored skill directory (``skills/<vendored name>/``)."""
+    parts = md.parts
+    return any(parts[i] == "skills" and parts[i + 1] in VENDORED_SKILLS for i in range(len(parts) - 1))
+
 # Inline Markdown link / image: ``[text](target)`` or ``![alt](target)``. The
 # target group is everything up to the closing paren.
 _LINK_RE = re.compile(r"!?\[[^\]]*\]\(([^)]+)\)")
@@ -171,6 +181,8 @@ def check_file(path: Path) -> list[str]:
 
         line = _CODE_SPAN_RE.sub("", raw)  # drop inline code spans
         for target in _LINK_RE.findall(line):
+            if not target.split():
+                continue  # an empty or whitespace-only target, e.g. ``[x]( )``, has nothing to resolve
             target = target.split()[0]  # strip any "title" after the path
             if _is_skippable(target):
                 continue
@@ -206,7 +218,7 @@ def iter_markdown(paths: list[Path]) -> list[Path]:
             found.add(p)
         elif p.is_dir():
             for md in p.rglob("*.md"):
-                if any(part in EXCLUDED_DIRS for part in md.parts):
+                if any(part in EXCLUDED_DIRS for part in md.parts) or _is_vendored(md):
                     continue
                 found.add(md)
     return sorted(found)
