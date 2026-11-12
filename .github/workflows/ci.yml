@@ -44,7 +44,7 @@ jobs:
           exit $status
       - name: Upload scan reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: docsentinel-reports-py${{ matrix.python-version }}
           path: reports/
