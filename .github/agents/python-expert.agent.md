@@ -88,6 +88,11 @@ Never put document content in exception messages or reports beyond what a `Findi
 
 Add/maintain docstrings on every public function, class, and agent interface you change (project uses reStructuredText-style `:ivar:`/`:param:`).  
 
+You may update a doc you are implementing against, such as a spec section or the option's
+entry in `configuration.md`. You do **not** own the documentation sweep: you cannot start
+`docs-updater` yourself, so you report a `Docs impact` line and your caller starts it (see
+[`docs/dev/documentation_sync.md`](../../docs/dev/documentation_sync.md)).
+
 ## After you code
 
 Run these unconditionally, in order, regardless of how small the change is - this step is never optional and never skipped because "the diff was tiny":
@@ -101,6 +106,27 @@ After each command, read its output and act on it before moving on:
 - If a fix isn't obviously safe - it would change behavior, silence a real defect, or the correct resolution is ambiguous - stop and ask the user instead of guessing or suppressing it (`# noqa`, a weaker assertion, `xfail`).
 - **If any test regresses, you are blocked**: fix the cause before continuing. Never weaken or `xfail` a test to turn the bar green.
 - The Stop hook (`.github/hooks/scripts/run_tests.py`) re-runs the same two commands and blocks the session on failure - treat that as a backstop, not a substitute for running them yourself while you still have full context on the change.
+
+### Docs impact (always)
+
+With the tests green, classify your diff against the triggers in [documentation_sync.md](/docs/dev/documentation_sync.md) §2:
+
+- **R**: rule behaviour;
+- **C**: CLI;
+- **K**: config;
+- **O**: report output;
+- **P**: public API;
+- **A**: architecture;
+- **D**: developer workflow.
+
+End your report with exactly one line:
+
+```text
+Docs impact: <IDs> -> <one clause per user-visible change>
+```
+
+or `Docs impact: none (<reason>)`. Do not leave the line out. If you are unsure, list the trigger:
+a false positive costs one cheap `docs-updater` run, a miss leaves the README stale.
 
 Commit with **Conventional Commits**: `feat:`, `fix:`, `refactor:`, `test:`, `docs:`, `chore:`, `perf:`. One logical change per commit. Never push directly to `master` - open a branch and PR.
 

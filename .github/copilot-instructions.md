@@ -24,6 +24,8 @@ Project architecture, commands, conventions and test layout live in [`CLAUDE.md`
 | `feature-reviewer`, `security-auditor`, `background-reviewer` | Review, threat modelling, asynchronous deep review. |
 | `task-verifier` | Spec-compliance check against `docs/roadmap/**`. |
 | `docs-writer`, `docs-updater`, `docs-reviewer` | New docs, doc sync, DS301 triage. |
+
+Run `docs-updater` once per docs-impacting change set, after the tests are green and before the push. The triggers and the document map are in [documentation_sync.md](/docs/dev/documentation_sync.md); `python-expert` ends every report with a `Docs impact` line.
 | `incident-analyst` | Lifecycle and escalation-safety review. |
 
 ## Skills

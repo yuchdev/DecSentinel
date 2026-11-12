@@ -24,6 +24,7 @@
 | `docs/dev/python_style_rules.md` | Base Python style rules (formatting, comments, TODO format, typing). |
 | `docs/dev/markdown_dialect.md` | Supported Markdown dialect for the shared fast scanner: supported constructs, intentional gaps, and per-rule dialect notes. |
 | [`docs/dev/markdown_scanner.md`](dev/markdown_scanner.md) | Developer guide for the shared `markdown_blocks.py` scanner. |
+| [`docs/dev/documentation_sync.md`](dev/documentation_sync.md) | When `docs-updater` runs (change triggers R/C/K/O/P/A/D) and which documents each trigger covers. |
 | `docs/roadmap/README.md` | Roadmap conventions and the milestone index: the Milestone → Story → Task hierarchy. Start here to navigate into any milestone's `plan.md`, then its story `README.md`s, then task specs - this registry does not re-list every roadmap leaf file. |
 | `docs/roadmap/0001-generic-implementation/plan.md` | Milestone 0001: rule registry, `pyproject.toml`/`docsentinel.toml` config conventions with `select`/`ignore`, and the first `fast`-profile detectors (`DS101`-`DS103`) - the "first limited run." 4 stories, fully task-specced. |
 | `docs/roadmap/0002-standard-profile-detectors/plan.md` | Milestone 0002: `standard`-profile detectors - corpus duplication, low-information content, text complexity, and a `docsig`-based doc-vs-code signature check (`DS201`-`DS204`). 5 stories, fully task-specced. |

@@ -18,8 +18,8 @@ This is the standing Python-stack dev fleet - every one of these agents is prese
 |-----------------------|------------------------------------------|--------|
 | `app-architect`       | design, ADRs, contracts, tech-debt       | opus   |
 | `background-reviewer` | async dep/secret/perf/license audits     | sonnet |
-| `docs-updater`        | docs, runbooks, OpenAPI, docstrings      | sonnet |
-| `docs-writer`         | docs, runbooks, OpenAPI, docstrings      | sonnet |
+| `docs-updater`        | sync existing docs after a docs-impacting change | sonnet |
+| `docs-writer`         | net-new docs for an undocumented feature | sonnet |
 | `feature-reviewer`    | correctness/security/domain PR review    | sonnet |
 | `python-expert`       | implementation, fixes, refactors         | opus   |
 | `security-auditor`    | threat models, merge-blocking sec review | opus   |
@@ -33,8 +33,10 @@ This is the standing Python-stack dev fleet - every one of these agents is prese
 3. **Test** - `testing-expert` writes unit + integration tests and reports coverage delta.
 4. **Security** - `security-auditor` threat-models the change (only if it touches auth/secrets/integrations/untrusted-input ingestion). CRITICAL ⇒ stop.
 5. **Review** - `feature-reviewer` issues LGTM / REQUEST_CHANGES. Loop back to `python-expert` until LGTM.
-6. **Docs write** - `docs-writer` writes new docs/runbooks/OpenAPI/docstrings.
-7. **Docs update** - `docs-updater` updates existing docs/OpenAPI/docstrings.
+6. **Docs write** - `docs-writer`, only if the change adds a feature no existing document covers.
+7. **Docs update** - `docs-updater`, once, after LGTM and before Land, whenever `python-expert`'s
+   `Docs impact` line is not `none`. Brief it with that line and the change set. The triggers and
+   the document map are in [documentation_sync.md](/docs/dev/documentation_sync.md); a skipped step 7 needs a stated reason.
 8. **Land** - open a PR (never push to `master`/`master`); summarize the trail.
 
 ## Rules

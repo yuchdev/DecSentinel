@@ -61,7 +61,8 @@ Instead, resolve once and persist a small cursor:
     {"nn": "01", "slug": "config-model", "status": "complete"},
     {"nn": "02", "slug": "...", "status": "not_started"}
   ],
-  "next_index": 1
+  "next_index": 1,
+  "docs_impact": ["R, K -> DS101 resolves / targets against link_root"]
 }
 ```
 
@@ -203,6 +204,7 @@ do not delegate to an agent that can only find nothing.** Each gate is module-sc
 | `pyproject.toml` or any `requirements*.txt` changed      | `/dep-audit`                                                                                                                         |
 | Any file under an API route, auth, or middleware path changed, or anywhere handling credentials/tokens | `/secret-scan src/doc_sentinel/<changed-module>/` |
 | Task touches docs / public API                           | `/link-check docs/` - inbound references still resolve.                                                                              |
+| `python-expert` reported `Docs impact` other than `none` | Do not run `docs-updater` yet. Append the line to the cursor's `docs_impact` list, which runs at story completion (Step 7). |
 
 ### Step 7 - record the task, then check the story
 
@@ -225,7 +227,13 @@ do not delegate to an agent that can only find nothing.** Each gate is module-sc
 - **Story not yet complete** → go to Step 8 (continue with the next task).
 - **Story complete** → this is the **one** place the whole suite runs: execute
   `uv run pytest tests/unit/ -q --cov=doc_sentinel` once (summary line only), then run
-  `/pr-review` (must reach LGTM or have REQUEST_CHANGES resolved). Then update
+  `/pr-review` (must reach LGTM or have REQUEST_CHANGES resolved). If the cursor's
+  `docs_impact` list is not empty, delegate **once** to the `docs-updater` custom agent (`task` tool):
+  - pass it the collected lines and the story's commit range, per [documentation_sync.md](/docs/dev/documentation_sync.md);
+  - wait for it to finish before the story commit is pushed;
+  - an architecture (`A`) trigger also asks `docs-updater` to check `docs/architecture/README.md` and the diagrams.
+
+  Then update
   `{milestone_path}/status.md` `## Current status` with a **targeted row edit**:
   - Set the story row's Status cell to `✅ Complete` (note any deferred tasks inline,
     e.g. "✅ Complete (task 11 deferred)").
