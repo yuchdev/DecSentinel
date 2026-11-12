@@ -18,6 +18,7 @@ This is the standing Python-stack dev fleet - every one of these agents is prese
 |-----------------------|------------------------------------------|--------|
 | `app-architect`       | design, ADRs, contracts, tech-debt       | opus   |
 | `background-reviewer` | async dep/secret/perf/license audits     | sonnet |
+| `diagram-creator`     | create, fix and render docs/diagrams     | sonnet |
 | `docs-updater`        | sync existing docs after a docs-impacting change | sonnet |
 | `docs-writer`         | net-new docs for an undocumented feature | sonnet |
 | `feature-reviewer`    | correctness/security/domain PR review    | sonnet |
@@ -29,6 +30,8 @@ This is the standing Python-stack dev fleet - every one of these agents is prese
 ## Canonical orchestration: ticket → merged PR
 
 1. **Design** - if non-trivial, `app-architect` writes/updates an ADR. Gate: human approves the ADR.
+   Keep its `Diagram impact` line. After step 5 (LGTM, code as built), run `diagram-creator` with
+   it whenever it is not `none`, alongside step 7.
 2. **Implement** - `python-expert` creates a feature branch and implements against the ADR; runs tests before/after.
 3. **Test** - `testing-expert` writes unit + integration tests and reports coverage delta.
 4. **Security** - `security-auditor` threat-models the change (only if it touches auth/secrets/integrations/untrusted-input ingestion). CRITICAL ⇒ stop.

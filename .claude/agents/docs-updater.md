@@ -21,6 +21,12 @@ If no trigger fires, stop and report `Docs impact: none` with the reason.
 - For each trigger that fires, check **every** document in the policy's §3 row, plus the
   documents every trigger covers. Read the code to see what it does now; never take the
   implementer's summary as the description.
+- **[rules.md](/docs/user/reference/rules.md) is the source of truth for rule metadata**: code, profile, severity, activation,
+  title, description, fault class and config keys. The drift test keeps it equal to the code, so
+  trust it over any other document. Never keep a second rule table elsewhere: link to it. Make
+  every rule mention elsewhere (the README bullets, `/CLAUDE.md`, the tutorials and the
+  architecture doc) agree with its row. If the row itself looks wrong, the code is wrong or the
+  row is stale: report it, don't change the row to fit the prose.
 - **`README.md` is always in scope** for R, C, K and P triggers. Check its rule bullets, its
   Command-Line Usage block, its Configuration example and its Python Library section against the
   code. Run `uv run docsentinel rules` and `uv run docsentinel scan --help` to compare.

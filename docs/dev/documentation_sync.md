@@ -38,12 +38,12 @@ docs described the bug.
 
 | ID | Documents |
 |---|---|
-| R | `/README.md` rule bullet; `/CLAUDE.md` Architecture (`/src/docsentinel/config.py`, `/src/docsentinel/rules.py`, `/src/docsentinel/detectors/`); `/docs/user/reference/configuration.md` for the rule's options; `/docs/dev/markdown_scanner.md` for resolver ownership; `/docs/specs/finding-types.md` for type labels; `/docs/specs/fault-classes.md` for a new rule code |
+| R | `/docs/user/reference/rules.md` (source of truth for rule metadata, drift-tested; `python-expert` updates it with the code); `/README.md` rule bullet; `/CLAUDE.md` Architecture (`/src/docsentinel/config.py`, `/src/docsentinel/rules.py`, `/src/docsentinel/detectors/`); `/docs/user/reference/configuration.md` for the rule's options; `/docs/dev/markdown_scanner.md` for resolver ownership; `/docs/specs/finding-types.md` for type labels; `/docs/specs/fault-classes.md` for a new rule code |
 | C | `/README.md` Command-Line Usage and Exit Codes; `/docs/user/tutorial/cli.md`; `/CLAUDE.md` Commands and the `/src/docsentinel/cli.py` entry |
 | K | `/README.md` Configuration example (common keys only); `/docs/user/reference/configuration.md` (every key, plus the key-to-rule table); `/CLAUDE.md` `/src/docsentinel/config.py` entry |
 | O | `/docs/specs/report-template-format.md`; `/docs/user/tutorial/report.md` and `/docs/user/tutorial/custom-reports.md`; `/CLAUDE.md` `/src/docsentinel/reporting.py` and `/src/docsentinel/telemetry/` entries |
 | P | `/README.md` Python Library and Pytest Integration; `/docs/user/tutorial/library.md`; `/CLAUDE.md` |
-| A | `/docs/architecture/README.md`; diagrams under `/docs/diagrams/` (hand them to `diagram-creator`); the governing ADR status; `/CLAUDE.md` Architecture; the `/README.md` profile introduction for dependency changes |
+| A | `/docs/architecture/README.md`; diagrams under `/docs/diagrams/`. `app-architect` reports a `Diagram impact` line and the caller hands it to `diagram-creator`; `docs-updater` never edits a diagram source; the governing ADR status; `/CLAUDE.md` Architecture; the `/README.md` profile introduction for dependency changes |
 | D | `/CLAUDE.md` Commands; `/.github/copilot-instructions.md`; `/docs/agent/` |
 
 Every trigger also covers these:

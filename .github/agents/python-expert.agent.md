@@ -107,6 +107,17 @@ After each command, read its output and act on it before moving on:
 - **If any test regresses, you are blocked**: fix the cause before continuing. Never weaken or `xfail` a test to turn the bar green.
 - The Stop hook (`.github/hooks/scripts/run_tests.py`) re-runs the same two commands and blocks the session on failure - treat that as a backstop, not a substitute for running them yourself while you still have full context on the change.
 
+### Rule table (when you add, remove or change a rule)
+
+[rules.md](/docs/user/reference/rules.md) is the single table of checks, and `/tests/integration/test_rules_table.py` fails when
+it drifts from the code. When a change adds or removes a `Rule(...)` registration, or changes its
+`profile`, `severity`, `title`, `description` or `opt_in_option`, update the rule's row in the same
+change. The same applies to a rule's `FAULT_CLASSES` entry or the config keys it consumes. Copy
+the registered strings word for word, then confirm the table against `uv run docsentinel rules`. A
+new rule also needs its rows in `/docs/specs/fault-classes.md` and `/docs/specs/finding-types.md`.
+Report it as trigger **R** in your `Docs impact` line, because the README and the reference pages
+still need `docs-updater`.
+
 ### Docs impact (always)
 
 With the tests green, classify your diff against the triggers in [documentation_sync.md](/docs/dev/documentation_sync.md) §2:

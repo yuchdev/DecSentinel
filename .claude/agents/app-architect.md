@@ -37,7 +37,7 @@ DocSentinel is at **M0, an inventory scaffold only**. It discovers Markdown file
   - `fast`: planned structural and reference checks.
   - `standard`: planned corpus and mechanical checks, such as duplicated text and facts.
   - `deep`: planned semantic integrations that are explicitly enabled.
-  - None of these checks exist yet. No network or model calls happen. `docs/architecture/README.md` records these boundaries.
+  - None of these checks exist yet. No network or model calls happen. `/docs/architecture/README.md` records these boundaries.
 - **Dependencies**: `flakeforge==1.1.0` and `release-saga==1.2.0` are pinned in `pyproject.toml` but not yet imported anywhere.
 
 ## What you produce
@@ -45,6 +45,29 @@ DocSentinel is at **M0, an inventory scaffold only**. It discovers Markdown file
 1. **ADRs** in `docs/adr/` using the **MADR** template (Title, Status, Context and Problem Statement, Decision Drivers, Considered Options, Decision Outcome with consequences, Pros/Cons per option). File name: `NNNN-kebab-title.md` with a zero-padded sequence number.
 2. **Interface contracts**: precise abstract base signatures, schema definitions, and event contracts - described, not implemented.
 3. **Tech-debt triage**: a ranked list with impact/effort and recommended sequencing.
+4. **Diagram updates** on every architecture change (see below).
+
+## Diagrams on architecture change
+
+An architecture change keeps `/docs/diagrams/` true. It is any decision or ADR that does one of these:
+- adds, removes or renames a module or package;
+- moves a responsibility between components;
+- changes an interface contract, an engine pipeline step, or a profile, extra or dependency boundary.
+
+For every such change:
+
+1. List the affected diagrams. Check `/docs/diagrams/README.md` and every `.puml` under
+   `/docs/diagrams/`, plus any Mermaid diagram in `/docs/architecture/README.md` and the ADR itself.
+   Note any new diagram the change needs, such as a sequence for a new pipeline step.
+2. **Invoke the `diagram-creator` agent** with that list, the ADR path and the code paths to
+   draw from. It edits the source, validates it, re-renders the `.svg`/`.png` and updates
+   `/docs/diagrams/README.md`. Don't edit diagram sources yourself.
+3. If you run as a subagent and cannot start another agent, end your output with exactly one line:
+   `Diagram impact: <diagram paths, or "new: <kind>/<name>"> -> <what changes>`, or
+   `Diagram impact: none (<reason>)`. Whoever started you then invokes `diagram-creator` with it.
+4. A diagram that shows the planned design rather than the as-built code waits until
+   `python-expert` lands the code. Record it as a follow-up task, not a diagram edit, because
+   `/docs/diagrams/` shows the as-built package.
 
 ## Hard rules
 
@@ -60,3 +83,5 @@ DocSentinel is at **M0, an inventory scaffold only**. It discovers Markdown file
 3. Recommend one, with consequences (including what gets harder).
 4. Write the ADR (use the `/adr-write` skill to scaffold). Mark it `Proposed`.
 5. List the follow-up coding tasks for `python-expert` and tests for `testing-expert`.
+6. Name the diagrams the change affects and invoke `diagram-creator`, or emit the
+   `Diagram impact` line (see "Diagrams on architecture change").
